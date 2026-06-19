@@ -3,10 +3,9 @@
 """
 advanced_bnn_with_physics_integrated.py
 - Physics-Informed BNN + Well constraints
-- Auto well mapping (无需命令行调 B/C)、分层划分、井样本强制进入每批
-- Physics loss 做标准化，尺度更稳
-- 训练/验证可视化+预测可视化齐全（含角度道 原始 vs 合成）
-"""
+- Auto well mapping (without command-line adjustment of B/C), stratified splitting, force well samples into each batch
+- Physics loss is standardized, for more stable scaling
+English implementation note for the surrounding code."""
 
 import os, json, math, random
 import numpy as np
@@ -23,7 +22,7 @@ import numpy as np, torch, torch.nn.functional as F
 from numpy.fft import rfft
 from scipy.stats import norm
 plt.rcParams["figure.dpi"] = 120
-# === ADD: imports (放在其他 import 之后均可) ===
+# === ADD: imports (can be placed after the other imports) ===
 import torch.nn.functional as F
 from numpy.fft import rfft, rfftfreq
 
@@ -42,13 +41,13 @@ except Exception:
 # ====================== Physics ======================
 class LearnableMultiFreqPhysics(nn.Module):
     """
-    多频 Ricker 混合 + 角度权重（可学习），只返回“中心采样点”的合成反射系数幅度
+English implementation note for the surrounding code.
     """
 
     def __init__(self, angle_degs, K=4, fmin=8.0, fmax=80.0,
                  ricker_len=100, dt=0.001, center_avg=3, eps=0.02):
         super().__init__()
-        # 角度缓冲
+        # angle buffer
         self.register_buffer("angle_degs", torch.tensor(angle_degs, dtype=torch.float32))
         self.K = int(K)
         self.fmin = float(fmin)
@@ -59,22 +58,22 @@ class LearnableMultiFreqPhysics(nn.Module):
         self.center_avg = int(center_avg)
         self.eps = float(eps)
 
-        # 频率混合参数
+        # frequency-mixture parameters
         self.freq_logits = nn.Parameter(torch.zeros(self.K))                  # [K]
         self.alpha = nn.Parameter(torch.zeros(len(angle_degs), self.K))       # [A,K]
 
-        # 角度仿射：gamma, delta
+        # angle-wise affine terms: gamma, delta
         self.register_parameter("gamma", nn.Parameter(torch.ones(len(angle_degs))))
         self.register_parameter("delta", nn.Parameter(torch.zeros(len(angle_degs))))
 
-        # Ricker 时间轴
+        # Ricker time axis
         t = torch.arange(self.ricker_len, dtype=torch.float32) * self.dt - (self.ricker_len * self.dt) / 2
         self.register_buffer("t", t)  # [L]
 
     def ricker_bank(self, f: torch.Tensor) -> torch.Tensor:
         """
-        f: [K] (Hz)，返回 [K,L] 的 Ricker 子波
-        - 全程保持在 f.device 上
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
         """
         device = f.device
         t = self.t.to(device)[None, :]     # [1,L]
@@ -88,7 +87,7 @@ class LearnableMultiFreqPhysics(nn.Module):
                             angle_deg: torch.Tensor,
                             eps: float = 0.01) -> torch.Tensor:
         """
-        支持：
+        supports: 
           props_denorm: (B,3)    -> return (B,A)
           props_denorm: (B,T,3)  -> return (B,T,A)
         """
@@ -108,7 +107,7 @@ class LearnableMultiFreqPhysics(nn.Module):
         dVs = (Vs2 - Vs) / torch.clamp(Vsm, min=1e-6)
         dR = (R2 - Rho) / torch.clamp(Rm, min=1e-6)
 
-        # angle: [A] -> 广播到最后一维
+        # angle: [A] -> broadcast to the last dimension
         th = angle_deg * torch.pi / 180.0
         while th.dim() < props_denorm.dim():
             th = th.unsqueeze(0)
@@ -127,7 +126,7 @@ class LearnableMultiFreqPhysics(nn.Module):
 
     def forward(self, props_denorm: torch.Tensor) -> torch.Tensor:
         """
-        支持：
+        supports: 
           props_denorm: (B,3)    -> return (B,A)
           props_denorm: (B,T,3)  -> return (B,T,A)
         """
@@ -163,18 +162,18 @@ class LearnableMultiFreqPhysics(nn.Module):
         else:
             raise ValueError(f"forward expects (B,3) or (B,T,3), got {tuple(props_denorm.shape)}")
 
-    # ===== VAIM 风格带限“参数” =====
+    # ===== VAIM-styleband-limited"parameters" =====
     def bandlimit_props(self, props_denorm: torch.Tensor) -> torch.Tensor:
         """
-        使用与合成地震相同的多频 Ricker 混合，在“纵向”上对 VP/VS/RHOB 做带限平滑。
+English implementation note for the surrounding code.
 
-        - 输入 (B,3)：当前框架只有单点，没有真实“纵向维度”，直接返回；
-        - 输入 (B,T,3)：对 T 维做 1D 卷积带限平滑；若 T 太短(<子波长度)，也直接返回。
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
         """
         import torch.nn.functional as F
         device = props_denorm.device
 
-        # 情况1：当前训练大多是 (B,3)，不做卷积
+        # case1: most current training samples are (B,3), no convolution is applied
         if props_denorm.dim() == 2:
             return props_denorm
 
@@ -183,35 +182,35 @@ class LearnableMultiFreqPhysics(nn.Module):
 
         B, T, C = props_denorm.shape
 
-        # ★★ 如果纵向样点太少（比如 T<10），没法定义合理带限，直接返回
+        # Implementation note for the surrounding code.
         if T < 10:
             return props_denorm
 
-        # --- 构造一个“有效带限子波” w_eff: (1,1,L) ---
+        # Implementation note for the surrounding code.
         f = self.fmin + (self.fmax - self.fmin) * torch.sigmoid(self.freq_logits.to(device))  # (K,)
         w_bank = self.ricker_bank(f.to(device))                                                # (K, L)
         freq_w = torch.softmax(self.freq_logits.to(device), dim=0)                             # (K,)
 
         w_eff = (freq_w[:, None] * w_bank).sum(dim=0, keepdim=True)                            # (1, L)
 
-        # 能量归一化，避免卷积幅值漂移
+        # Implementation note for the surrounding code.
         w_eff = w_eff / (torch.sqrt(torch.sum(w_eff * w_eff, dim=-1, keepdim=True)) + 1e-12)
 
         w_eff = w_eff.view(1, 1, -1)                                                           # (1, 1, L)
         kernel_len = int(w_eff.shape[-1])
 
-        # padding 选 (kernel_len-1)//2，使 T_out ≈ T
+        # Implementation note for the surrounding code.
         pad = (kernel_len - 1) // 2
 
         x = props_denorm.permute(0, 2, 1).reshape(B * C, 1, T)                                 # (B*C, 1, T)
 
-        # 再防一手：如果 T + 2*pad < kernel_len，说明太短，直接退回原值
+        # Implementation note for the surrounding code.
         if T + 2 * pad < kernel_len:
             return props_denorm
 
         y = F.conv1d(x, w_eff.to(device), padding=pad)                                         # (B*C, 1, T_out)
 
-        # 若 T_out != T，裁剪/补齐回 T
+        # Implementation note for the surrounding code.
         if y.shape[-1] > T:
             y = y[..., :T]
         elif y.shape[-1] < T:
@@ -223,38 +222,38 @@ class LearnableMultiFreqPhysics(nn.Module):
 class PhysicsInformedLossLearnable:
     def __init__(self, physics_model, physics_weight=0.1, data_weight=1.0,
                  x_mean=None, x_std=None, standardize=True, prior_weight: float = 0.05,
-                 # === 岩石物理先验相关参数 ===
+                 # === rock-physics priorrelatedparameters ===
                  rp_weight: float = 0.05,
-                 vp_vs_bounds=(0.4, 0.7),   # Vs/Vp 合理区间（可按你工区再调）
-                 rho_min: float = 1.9):     # 密度下限（g/cc，大致值）
+                 vp_vs_bounds=(0.4, 0.7),   # Vs/Vp reasonable range(can be adjusted for the target area)
+                 rho_min: float = 1.9):     # density lower bound(g/cc, approximate value)
 
-        self.physics_model = physics_model          # 可学习正演核
-        self.physics_weight = float(physics_weight) # 地震域物理一致性权重（raw）
-        self.data_weight = float(data_weight)       # 这里只做记录
-        self.prior_weight = float(prior_weight)     # VAIM 带限先验权重（raw）
+        self.physics_model = physics_model          # learnable forward-modeling kernel
+        self.physics_weight = float(physics_weight) # seismic-domain physics-consistency weight(raw)
+        self.data_weight = float(data_weight)       # recorded only here
+        self.prior_weight = float(prior_weight)     # Implementation note for the surrounding code.
 
-        # 岩石物理先验
-        self.rp_weight = float(rp_weight)           # 岩石物理先验 raw 权重
+        # rock-physics prior
+        self.rp_weight = float(rp_weight)           # Implementation note for the surrounding code.
         self.vp_vs_bounds = tuple(vp_vs_bounds)
         self.rho_min = float(rho_min)
 
         self.mse = torch.nn.MSELoss()
 
-        # 还原地震振幅用的均值 / 方差
+        # mean/std used to restore seismic amplitudes
         self.x_mean = None if x_mean is None else torch.as_tensor(x_mean, dtype=torch.float32)
         self.x_std  = None if x_std  is None else torch.as_tensor(x_std,  dtype=torch.float32)
         self.standardize = bool(standardize)
 
-        self._debug_printed_once = False   # 控制 debug 打印频率
+        self._debug_printed_once = False   # control the frequency of debug printing
 
-    # --------- 岩石物理先验：Vs/Vp & RHOB 下限 ----------
+    # --------- rock-physics prior: Vs/Vp & RHOB lower bound ----------
 
     def _rock_physics_prior(self, props_denorm: torch.Tensor) -> torch.Tensor:
         """
-        简单岩石物理先验（带尺度控制）：
-        - Vs/Vp 比例应在 [low, high] 之间（超出范围按“偏离比例”惩罚）
-        - 密度 RHOB 不应太小 (>= rho_min)，用相对偏差惩罚
-        返回值控制在 ~[0, 10] 左右，避免爆炸。
+        simplerock-physics prior(with scale control): 
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
         """
         import torch
         import torch.nn.functional as F
@@ -263,31 +262,31 @@ class PhysicsInformedLossLearnable:
         Vs  = props_denorm[..., 1]
         Rho = props_denorm[..., 2]
 
-        # 1) Vs/Vp 比（无量纲）
+        # Implementation note for the surrounding code.
         ratio = Vs / Vp.clamp_min(1e-6)
         low, high = self.vp_vs_bounds
         low  = float(low)
         high = float(high)
 
-        # 超出区间的偏离量，按区间宽度归一化
+        # Implementation note for the surrounding code.
         width = max(high - low, 1e-3)
         under = F.relu(low  - ratio) / width     # ratio < low
         over  = F.relu(ratio - high) / width     # ratio > high
-        penalty_ratio = under + over             # >=0，一般不会太大
+        penalty_ratio = under + over             # >=0, usually not too large
 
-        # 2) 密度下限（用相对偏差）
-        #   drho = (rho_min - Rho)/rho_min，低于 rho_min 的地方 drho>0
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         rel_deficit = (self.rho_min - Rho) / max(self.rho_min, 1e-3)
-        penalty_rho = F.relu(rel_deficit)        # 一般在 [0,1] 之间
+        penalty_rho = F.relu(rel_deficit)        # Implementation note for the surrounding code.
 
-        # 3) 组合 & 限幅
-        rp = penalty_ratio + 0.5 * penalty_rho   # 每点 penalty
-        rp = rp.mean()                           # 对 batch 取均值
-        rp = torch.clamp(rp, 0.0, 10.0)          # 最多 10，防止极端 batch
+        # 3) combine & clamp
+        rp = penalty_ratio + 0.5 * penalty_rho   # per-point penalty
+        rp = rp.mean()                           # average over the batch
+        rp = torch.clamp(rp, 0.0, 10.0)          # Implementation note for the surrounding code.
         return rp
 
 
-    # ------------------- 主调用 -------------------
+    # ------------------- main call -------------------
 
     def __call__(self, pred, target, kl_divergence, seismic_input, denormalize_fn=None):
         import torch
@@ -303,13 +302,13 @@ class PhysicsInformedLossLearnable:
 
         B, W, C = pred.shape
 
-        # ---- 0) 数据项（仅记录，不进 physics_loss）----
+        # Implementation note for the surrounding code.
         if target is not None:
             data_loss = self.mse(pred, target)
         else:
             data_loss = torch.zeros((), device=device)
 
-        # ---- 1) 反归一化得到物理参数 VP/VS/RHOB ----
+        # Implementation note for the surrounding code.
         if denormalize_fn is not None:
             props_pred = denormalize_fn(pred).clone()  # (B,win,3)
             props_true = denormalize_fn(target).clone() if target is not None else None
@@ -317,8 +316,8 @@ class PhysicsInformedLossLearnable:
             props_pred = pred
             props_true = target
 
-        # ---- 2) 正演得到合成地震 ----
-        # sequence版：physics_model 应支持 (B,win,3) -> (B,win,A)
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         synth = self.physics_model(props_pred).clone()
         if synth.dim() != 3:
             raise RuntimeError(f"[PHYS] synth must be (B,win,A), got {tuple(synth.shape)}")
@@ -328,14 +327,14 @@ class PhysicsInformedLossLearnable:
         if W_s != W:
             raise RuntimeError(f"[PHYS] synth win mismatch: pred W={W}, synth W={W_s}")
 
-        # ---- 3) 从输入地震中取“中心 line 的整条时间窗振幅”（兼容 2.5D）----
-        # 目标：center_norm shape = (B, win, A)
+        # Implementation note for the surrounding code.
+        # target: center_norm shape = (B, win, A)
         if seismic_input.dim() == 4:
             # seismic_input: [B, A_in, line_ctx, win]
             A_in = int(seismic_input.shape[1])
             hl = int(seismic_input.shape[2] // 2)  # center line
 
-            # 取中心 line 的整个 win
+            # Implementation note for the surrounding code.
             # -> [B, A_use, win]
             center_aw = seismic_input[:, :min(A, A_in), hl, :].contiguous()
             # -> [B, win, A_use]
@@ -363,7 +362,7 @@ class PhysicsInformedLossLearnable:
         center_norm = center_norm[:, :, :A_use]
         synth = synth[:, :, :A_use]
 
-        # ---- 还原到物理振幅（与 X 的标准化口径一致）----
+        # Implementation note for the surrounding code.
         if (self.x_mean is None) or (self.x_std is None):
             center = center_norm
         else:
@@ -372,7 +371,7 @@ class PhysicsInformedLossLearnable:
 
             # Scheme A: xm/xs = [A, win]
             if xm.dim() == 2 and xs.dim() == 2:
-                # 截断到实际 A_use / W
+                # Implementation note for the surrounding code.
                 A_stat = min(int(xm.shape[0]), int(xs.shape[0]), A_use)
                 W_stat = min(int(xm.shape[1]), int(xs.shape[1]), int(center_norm.shape[1]))
 
@@ -381,7 +380,7 @@ class PhysicsInformedLossLearnable:
 
                 synth = synth[:, :W_stat, :A_stat]
 
-            # 旧版：xm/xs = [A]
+            # Implementation note for the surrounding code.
             elif xm.dim() == 1 and xs.dim() == 1:
                 A_stat = min(int(xm.numel()), int(xs.numel()), A_use)
 
@@ -393,9 +392,9 @@ class PhysicsInformedLossLearnable:
             else:
                 raise RuntimeError(f"[PHYS] unexpected x_mean/x_std shape: xm={tuple(xm.shape)}, xs={tuple(xs.shape)}")
 
-        # ---- 4) 标准化 synth / center（保持同一套统计量）----
+        # ---- 4) standardize synth / center(use the same statistics)----
         if self.standardize:
-            # 对 batch+time 维做统计，按角度标准化
+            # Implementation note for the surrounding code.
             c_mean = center.mean(dim=(0, 1), keepdim=True).detach()  # [1,1,A]
             c_std = (center.std(dim=(0, 1), keepdim=True) + 1e-6).detach()  # [1,1,A]
 
@@ -405,16 +404,16 @@ class PhysicsInformedLossLearnable:
             center_std = center
             synth_std = synth
 
-        # 软饱和
+        # soft saturation
         sat = 3.0
         center_std = sat * torch.tanh(center_std / sat)
         synth_std = sat * torch.tanh(synth_std / sat)
 
-        # sequence版 misfit：整条 win × angle
+        # Implementation note for the surrounding code.
         physics_misfit_raw = F.smooth_l1_loss(synth_std, center_std, reduction="mean", beta=1.0)
         physics_misfit = physics_misfit_raw
 
-        # ---- 5) 带限先验 ----
+        # ---- 5) band-limitedprior ----
         prior_loss = torch.zeros((), device=device)
         if (props_true is not None) and hasattr(self.physics_model, "bandlimit_props"):
             m_bl_pred = self.physics_model.bandlimit_props(props_pred)  # (B,win,3)
@@ -428,13 +427,13 @@ class PhysicsInformedLossLearnable:
 
             prior_loss = F.smooth_l1_loss(m_bl_pred_n, m_bl_true_n, reduction="mean", beta=0.5)
 
-        # ---- 6) 岩石物理先验 ----
+        # ---- 6) rock-physics prior ----
         rp_raw = torch.zeros((), device=device)
         if self.rp_weight > 0.0:
-            rp_raw = self._rock_physics_prior(props_pred)  # 已支持 [...,3]
+            rp_raw = self._rock_physics_prior(props_pred)  # already supports [...,3]
             rp_raw = torch.clamp(rp_raw, 0.0, 10.0)
 
-        # fallback physics loss（外层再乘 physics_weight）
+        # Implementation note for the surrounding code.
         physics_loss = physics_misfit + float(self.prior_weight) * prior_loss + float(self.rp_weight) * rp_raw
         physics_loss = torch.nan_to_num(physics_loss, nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -468,9 +467,9 @@ def _as_np_idx(idx):
 
 def check_split_leakage(ds, train_indices, val_indices, *, line_ctx=1, loow_lt_set=None, verbose=1):
     """
-    检查两类泄漏：
-      1) (l,t) 是否同时出现在 train / val（window 随机切最常见）
-      2) 2.5D 邻域泄漏：line_ctx>1 时，train 是否落入 val 的同 trace 线向邻域带（会让 patch“看到”val附近信息）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     train_indices = _as_np_idx(train_indices)
     val_indices   = _as_np_idx(val_indices)
@@ -492,7 +491,7 @@ def check_split_leakage(ds, train_indices, val_indices, *, line_ctx=1, loow_lt_s
         ex = list(overlap)[:10]
         raise RuntimeError(f"[LEAK][(l,t)-OVERLAP] train/val share same (l,t)! examples={ex}")
 
-    # --- 2) LOOW: val 必须只包含 loow_lt_set（如果提供）---
+    # Implementation note for the surrounding code.
     if loow_lt_set is not None and len(loow_lt_set) > 0:
         bad = [tuple(x) for x in lt_val.tolist() if tuple(x) not in loow_lt_set]
         if len(bad) > 0:
@@ -500,13 +499,13 @@ def check_split_leakage(ds, train_indices, val_indices, *, line_ctx=1, loow_lt_s
         if verbose:
             print(f"[LEAK-CHECK][LOOW] val (l,t) all in loow_lt_set size={len(loow_lt_set)}")
 
-    # --- 3) 2.5D 邻域泄漏防护检查 ---
+    # --- 3) 2.5D neighborhoodleakageguardcheck ---
     hl = int(line_ctx) // 2
     if hl > 0:
-        band = 2 * hl  # 你之前的 guard 逻辑：line_ctx=7 -> hl=3 -> band=6
+        band = 2 * hl  # Implementation note for the surrounding code.
         lt_train_arr = lt_train.astype(int)
 
-        # 需要一个“目标集合”：优先用 loow_lt_set，否则用 val_lt_set（通用）
+        # Implementation note for the surrounding code.
         target = loow_lt_set if (loow_lt_set is not None and len(loow_lt_set) > 0) else val_lt_set
 
         bad2 = []
@@ -527,15 +526,15 @@ def check_split_leakage(ds, train_indices, val_indices, *, line_ctx=1, loow_lt_s
 
 def check_mod_channel_health(ds, indices, name="SET", props_idx=(0,1,2)):
     """
-    检查标签通道是否退化（RHOB 常数/近似全零/方差极小）。
+English implementation note for the surrounding code.
     """
     idx = _as_np_idx(indices)
     samples = np.asarray(ds.samples).astype(int)
     l = samples[idx, 0]; t = samples[idx, 1]; tau = samples[idx, 2]
 
-    # 取标签
+    # fetch labels
     Y = ds.mod[l, t, : , tau]  # [M,C]
-    # 只关心 props_idx
+    # focus only on props_idx
     Yp = Y[:, list(props_idx)].astype(np.float64)  # [M,3]
     mean = Yp.mean(axis=0)
     std  = Yp.std(axis=0)
@@ -546,10 +545,10 @@ def check_mod_channel_health(ds, indices, name="SET", props_idx=(0,1,2)):
     for i, nm in enumerate(["VP","VS","RHOB"]):
         print(f"  - {nm}: mean={mean[i]:.6g} std={std[i]:.6g} min={vmin[i]:.6g} max={vmax[i]:.6g}")
 
-    # RHOB 红线：std 非常小
+    # RHOB red flag: std very small
     if std[2] < 1e-6:
         print(f"[Y-HEALTH][{name}][WARN] RHOB std too small ({std[2]:.3e}). "
-              f"大概率：第三通道常数/全零/单位或读取错误。")
+              f"Most likely, the third channel is constant/all zeros or has a unit/reading error.")
     return mean, std
 
 
@@ -571,14 +570,14 @@ def pick_big_numeric(d: dict):
             if score > best_score:
                 best_key, best_arr, best_score = k, v, score
     if best_arr is None:
-        raise ValueError(".mat 里没有找到数值数组")
+        raise ValueError("English implementation note for the surrounding code.")
     return best_key, best_arr
 
 def load_4d(path: str):
     d = sio.loadmat(path)
     key, arr = pick_big_numeric(d)
     arr = np.asarray(arr, dtype=np.float32)
-    if arr.ndim != 4: raise ValueError(f"{path} 主数组不是 4D，得到 {arr.shape}")
+    if arr.ndim != 4: raise ValueError(f"{path} main array is not 4-D; got {arr.shape}")
     print(f"{os.path.basename(path)}: key='{key}', shape={arr.shape}, dtype={arr.dtype}")
     return arr, key
 
@@ -590,7 +589,7 @@ def load_wells_xlsx(path, base=1, swap_lt=True):
     import pandas as pd
     T = pd.read_excel(path, header=None, engine='openpyxl')
     if T.shape[1] < 3:
-        raise ValueError("井位表至少三列：井名/线号/道号")
+        raise ValueError("the well-location table must contain at least three columns: well name/line number/trace number")
     lines = pd.to_numeric(T.iloc[:,1], errors="coerce").values
     traces= pd.to_numeric(T.iloc[:,2], errors="coerce").values
     if swap_lt: lines, traces = traces, lines
@@ -652,8 +651,8 @@ def aux_sequence_loss_step(model, ds, device, beta_spec=0.10, beta_grad=0.05, be
         out = model(X_batch, return_kl=False)
         mu = out[0] if isinstance(out, tuple) else out
         mus.append(mu)
-    mu_n = torch.stack(mus, 0).mean(0)         # [T,3] (Z空间)
-    MU   = mu_n * torch.tensor(ds.Y_std)[None,:] + torch.tensor(ds.Y_mean)[None,:]  # 物理
+    mu_n = torch.stack(mus, 0).mean(0)         # Implementation note for the surrounding code.
+    MU   = mu_n * torch.tensor(ds.Y_std)[None,:] + torch.tensor(ds.Y_mean)[None,:]  # Implementation note for the surrounding code.
     L_spec = _spectral_mse(MU.detach().cpu().numpy(), Y_true.numpy())
     L_grad = _grad_l1(MU, Y_true)
     L_tv   = (MU[1:] - MU[:-1]).pow(2).mean()
@@ -662,7 +661,7 @@ def aux_sequence_loss_step(model, ds, device, beta_spec=0.10, beta_grad=0.05, be
 
 # ====== NEW: hard-sample weights (optional) ======
 def compute_trace_grad_weights(ds, k=1.5, eps=1e-6):
-    # 需要 ds.indices: 每个训练样本的 (l,t,tau)
+    # Implementation note for the surrounding code.
     L, Tn, C, N = ds.stack.shape
     w_list = []
     for (l, t, tau) in ds.indices:
@@ -679,8 +678,8 @@ def compute_trace_grad_weights(ds, k=1.5, eps=1e-6):
 @torch.no_grad()
 def fit_channel_temperature(y_true_d, mu_d, std_d, eps=1e-12):
     """
-    按通道拟合温度 tau_c，使得 E[(y-μ)^2] ≈ tau_c^2 * E[σ^2]
-    返回：tau (3,), 以及校准后的 std_cal
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
     num = np.mean((y_true_d - mu_d) ** 2, axis=0)          # (3,)
@@ -710,7 +709,7 @@ def gaussian_crps(y, mu, sigma):
     z = (y - mu) / (sigma + 1e-12)
     return sigma * (z*(2*norm.cdf(z)-1) + 2*norm.pdf(z) - 1/np.sqrt(np.pi))
 
-# === ADD: Student-t NLL 小工具 ===
+# === ADD: Student-t NLL helper ===
 def student_t_nll(err: torch.Tensor,
                   logvar: torch.Tensor,
                   df: float = 4.0,
@@ -742,17 +741,17 @@ def student_t_nll(err: torch.Tensor,
 
 
 
-# -------- 工程线/道 -> 体索引映射 + 自动标定 --------
+# -------- survey line/trace -> volume-index mapping + automatic calibration --------
 def map_wells_to_volume(
     wells_raw, L, T, swap=False, one_based=True,
     line_origin=2064.0, trace_origin=1677.0,
     line_scale=451.0/(2334.0-2064.0), trace_scale=351.0/(1941.0-1677.0),
     line_offset=0.0, trace_offset=0.0, round_mode="round", clip=True,
-    verbose=True   # ← 新增：控制是否打印日志
+    verbose=True   # Implementation note for the surrounding code.
 ):
     wr = np.asarray(wells_raw, dtype=float)
     if wr.ndim != 2 or wr.shape[1] < 2:
-        raise ValueError(f"wells_raw 维度异常：{wr.shape}")
+        raise ValueError(f"wells_raw has an abnormal dimension: {wr.shape}")
     if wr.shape[1] > 2: wr = wr[:, -2:]
     if swap: wr = wr[:, [1, 0]]
     if one_based: wr = wr - 1.0
@@ -760,12 +759,12 @@ def map_wells_to_volume(
     finite_mask0 = np.isfinite(wr).all(axis=1)
     wr = wr[finite_mask0]
     if wr.size == 0:
-        if verbose: print("[WARN] wells 全部非有限，返回空")
+        if verbose: print("English implementation note for the surrounding code.")
         return np.empty((0,2), dtype=np.int32)
 
-    # 打印点 #1：输入范围
+    # Implementation note for the surrounding code.
     if verbose:
-        print(f"[INFO] wells 输入范围：line[{wr[:,0].min():.3f},{wr[:,0].max():.3f}] "
+        print(f"[INFO] wells input range: line[{wr[:,0].min():.3f},{wr[:,0].max():.3f}] "
               f"trace[{wr[:,1].min():.3f},{wr[:,1].max():.3f}]")
 
     line_idx_f  = (wr[:,0] - line_origin)  * line_scale  + line_offset
@@ -778,7 +777,7 @@ def map_wells_to_volume(
     mask_fin = np.isfinite(line_idx) & np.isfinite(trace_idx)
     line_idx, trace_idx = line_idx[mask_fin], trace_idx[mask_fin]
     if line_idx.size == 0:
-        if verbose: print("[WARN] 映射结果全 NaN/Inf")
+        if verbose: print("English implementation note for the surrounding code.")
         return np.empty((0,2), dtype=np.int32)
 
     wells_mapped = np.stack([line_idx, trace_idx], axis=1)
@@ -798,17 +797,17 @@ def map_wells_to_volume(
         wells_mapped = np.unique(wells_mapped, axis=0)
     dedup = before - wells_mapped.shape[0]
 
-    # 打印点 #2～#3：映射后范围与统计
+    # Implementation note for the surrounding code.
     if wells_mapped.size > 0:
         if verbose:
-            print(f"[INFO] 映射后范围：line[{wells_mapped[:,0].min()},{wells_mapped[:,0].max()}] "
+            print(f"[INFO] mapped range: line[{wells_mapped[:,0].min()},{wells_mapped[:,0].max()}] "
                   f"trace[{wells_mapped[:,1].min()},{wells_mapped[:,1].max()}]")
     else:
-        if verbose: print("[WARN] 映射后无有效井点")
+        if verbose: print("English implementation note for the surrounding code.")
 
     if verbose:
-        print(f"[INFO] 有效井点 {wells_mapped.shape[0]} "
-              f"(越界移除:{dropped_oor}, 去重:{dedup}, clip={clip})")
+        print(f"[INFO] valid well points: {wells_mapped.shape[0]} "
+              f"(out-of-bound removed: {dropped_oor}, deduplicated: {dedup}, clip={clip})")
 
     return wells_mapped.astype(np.int32)
 
@@ -826,7 +825,7 @@ def auto_calibrate_wells(
         if m.size == 0: return (-1, 10**9)
         in_mask = (m[:,0] >= 0) & (m[:,0] < L) & (m[:,1] >= 0) & (m[:,1] < T)
         uniq = np.unique(m[in_mask], axis=0).shape[0]
-        return (uniq, -abs(uniq - m.shape[0]))  # 多且不越界优先
+        return (uniq, -abs(uniq - m.shape[0]))  # Implementation note for the surrounding code.
 
     best_s = None; best_cfg=None; wr = np.asarray(wells_raw, dtype=float)
     for sw in swaps:
@@ -836,7 +835,7 @@ def auto_calibrate_wells(
                     for smt in scale_mults:
                         for ofl in offsets:
                             for oft in offsets:
-                                # 搜索阶段（试算）：不打印
+                                # Implementation note for the surrounding code.
                                 m = map_wells_to_volume(
                                     wr, L, T, swap=sw, one_based=ob,
                                     line_origin=line_origin, trace_origin=trace_origin,
@@ -845,7 +844,7 @@ def auto_calibrate_wells(
                                     round_mode=rd, clip=False, verbose=False
                                 )
 
-                                # 最终确定（clip=True）：打印
+                                # Implementation note for the surrounding code.
                                 best = map_wells_to_volume(
                                     wr, L, T, swap=sw, one_based=ob,
                                     line_origin=line_origin, trace_origin=trace_origin,
@@ -858,7 +857,7 @@ def auto_calibrate_wells(
                                 if best_s is None or s > best_s:
                                     best_s, best_cfg = s, (sw, ob, rd, sml, smt, ofl, oft)
     if best_cfg is None:
-        if verbose: print("[AUTO-WELLS] 无可用组合")
+        if verbose: print("[AUTO-WELLS] no valid combination available")
         return np.empty((0,2), dtype=np.int32), {}
 
     sw, ob, rd, sml, smt, ofl, oft = best_cfg
@@ -884,7 +883,7 @@ def auto_calibrate_wells(
             with open(os.path.join(out_dir, "wells_autocalib.json"), "w", encoding="utf-8") as f:
                 json.dump(params, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print("[AUTO-WELLS] 保存失败：", e)
+            print("[AUTO-WELLS] failed to save: ", e)
     return best, params
 
 def _spectral_stats_and_loss(seq_pred: torch.Tensor,
@@ -892,29 +891,29 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
                              fs_hz: float,
                              fband=(5.0, 200.0)) -> torch.Tensor:
     """
-    seq_*: (M, T, C)  —— 在 GPU 上即可；该函数全程 GPU
-    返回：|centroid_pred-true| + |bw6db_pred-true| 的 L1
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     device = seq_pred.device
-    assert seq_pred.shape == seq_true.shape, "seq_pred/seq_true 形状必须一致"
+    assert seq_pred.shape == seq_true.shape, "English implementation note for the surrounding code."
     M, T, C = seq_pred.shape
 
     # rFFT over time dim (dim=1)
     Sp = torch.abs(rfft(seq_pred, dim=1)) + 1e-12    # (M, T/2+1, C)
     St = torch.abs(rfft(seq_true, dim=1)) + 1e-12
 
-    # 频率轴（GPU）
+    # frequency axis(GPU)
     freq = rfftfreq(T, d=1.0 / fs_hz).to(device)     # (T/2+1,)
     band = (freq >= fband[0]) & (freq <= fband[1])
     Sp = Sp[:, band, :]                               # (M, K, C)
     St = St[:, band, :]
     f  = freq[band].view(1, -1, 1)                    # (1, K, 1)
 
-    # 频谱质心
+    # spectral centroid
     cen_p = (Sp * f).sum(dim=1) / (Sp.sum(dim=1) + 1e-12)  # (M, C)
     cen_t = (St * f).sum(dim=1) / (St.sum(dim=1) + 1e-12)
 
-    # -6 dB 带宽（以 1/sqrt(2) 阈值近似）
+    # Implementation note for the surrounding code.
     def _bw_6db(S, f_lin):  # S: (M,K,C), f_lin: (K,)
         M, K, C = S.shape
         thr = S.amax(dim=1, keepdim=True) / 2**0.5         # (M,1,C)
@@ -938,27 +937,27 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
 def cyclical_beta(epoch_idx: int, iter_idx: int, iters_per_epoch: int,
                   beta_max: float = 5e-6, mode: str = "cosine") -> float:
     """
-    余弦/三角循环 KL 退火：每个 epoch 内从 ~0 -> beta_max -> ~0.5*beta_max。
-    - epoch_idx: 从 1 开始
-    - iter_idx : 当前 batch 索引，从 0 开始
-    - iters_per_epoch: 本 epoch 的 batch 数
-    - beta_max: 你的 args.beta_kl 作为上界
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     if iters_per_epoch <= 1:
         return beta_max * 0.5
     phase = (iter_idx + 1) / float(iters_per_epoch)  # (0,1]
     if mode == "cosine":
-        # 先上升到 1，再回落到 0.5（平滑）
+        # Implementation note for the surrounding code.
         up = 0.5 * (1 - math.cos(math.pi * min(phase * 2, 1.0)))  # 0->1
         if phase <= 0.5:
             v = up
         else:
-            # 从 1 回落到 0.5
+            # Implementation note for the surrounding code.
             tail_phase = (phase - 0.5) / 0.5  # 0->1
             v = 1.0 - 0.5 * tail_phase
         return beta_max * float(v)
     else:
-        # 线性三角：0->1->0.5
+        # Implementation note for the surrounding code.
         if phase <= 0.5:
             v = phase / 0.5
         else:
@@ -968,19 +967,19 @@ def cyclical_beta(epoch_idx: int, iter_idx: int, iters_per_epoch: int,
 # ====================== Aux losses & schedules ======================
 def seq_aux_loss(pred, target, metas, w_shape=0.6):
     """
-    针对同一 (line, trace) 的时间序列做辅助约束：
-    - 一阶差分一致性（形状保持）
-    - 二阶差分（平滑/薄层不失真时可减小权重）
-    返回：标量 loss
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+    return: scalar loss
     """
     import torch, math
     device = pred.device
     B, D = pred.shape
 
-    # 将 batch 内样本按 (l,t) 分组并按 tau 排序
+    # Implementation note for the surrounding code.
     groups = {}
     for i, m in enumerate(metas):
-        # metas: (l, t, tau, is_well, gidx) —— 你上次已按此返回
+        # Implementation note for the surrounding code.
         l, t, tau = int(m[0]), int(m[1]), int(m[2])
         groups.setdefault((l, t), []).append((tau, i))
 
@@ -989,21 +988,21 @@ def seq_aux_loss(pred, target, metas, w_shape=0.6):
 
     d1_terms, d2_terms = [], []
     for _, lst in groups.items():
-        if len(lst) < 3:  # 至少 3 个点才算二阶
+        if len(lst) < 3:  # Implementation note for the surrounding code.
             continue
-        lst.sort(key=lambda z: z[0])  # 按 tau
+        lst.sort(key=lambda z: z[0])  # Implementation note for the surrounding code.
         idxs = torch.tensor([j for (_, j) in lst], device=device, dtype=torch.long)
 
         p = torch.index_select(pred, 0, idxs).contiguous()
         y = torch.index_select(target, 0, idxs).contiguous()
 
-        # 一阶差分
+        # first-order difference
         dp = p[1:] - p[:-1]
         dy = y[1:] - y[:-1]
         d1 = torch.nn.functional.smooth_l1_loss(dp, dy, reduction='mean', beta=0.5)
         d1_terms.append(d1)
 
-        # 二阶差分（可更弱）
+        # Implementation note for the surrounding code.
         ddp = dp[1:] - dp[:-1]
         ddy = dy[1:] - dy[:-1]
         d2 = torch.nn.functional.smooth_l1_loss(ddp, ddy, reduction='mean', beta=0.5)
@@ -1015,16 +1014,16 @@ def seq_aux_loss(pred, target, metas, w_shape=0.6):
     d1_mean = torch.stack(d1_terms).mean()
     d2_mean = torch.stack(d2_terms).mean() if len(d2_terms) > 0 else pred.new_tensor(0.0)
 
-    # 组合：一阶主导，二阶较弱
+    # Implementation note for the surrounding code.
     return d1_mean + w_shape * d2_mean
 
 
 def anneal_weight(epoch, *,
                   warmup=5, peak=1.0, hold=0, cool_start=None, cool_end=None, floor=0.3, mode="cos"):
     """
-    通用退火曲线：warmup -> (可选)hold -> cool 到 floor
-    - cool_start/cool_end: 若为 None，则不降温
-    - mode: "cos" 更平滑
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+    - mode: "cos" smoother
     """
     import math
     e = float(epoch)
@@ -1042,7 +1041,7 @@ def anneal_weight(epoch, *,
     if e >= cool_end:
         return floor
 
-    # 线性或余弦降温
+    # Implementation note for the surrounding code.
     frac = (e - cool_start) / max(1.0, (cool_end - cool_start))
     if mode == "cos":
         return floor + (peak - floor) * 0.5 * (1 + math.cos(math.pi * frac))
@@ -1052,16 +1051,16 @@ def anneal_weight(epoch, *,
 class PerChannelTemp(torch.nn.Module):
     def __init__(self, C: int, init_tau: float = 1.0):
         super().__init__()
-        # 原始参数存放在 Raw 空间，用 softplus+1 做正且 >=1 的约束
+        # Implementation note for the surrounding code.
         init_raw = np.log(np.exp(init_tau - 1.0) - 1.0 + 1e-6)
         self.tau_raw = torch.nn.Parameter(torch.full((C,), float(init_raw)))
-        # 默认先冻结，训练到一半再解冻（见 train loop）
+        # Implementation note for the surrounding code.
         self.tau_raw.requires_grad_(False)
 
     def forward(self, sigma):  # sigma: (..., C)
         tau = F.softplus(self.tau_raw) + 1.0
         return sigma * tau, tau.detach()
-# === ADD: 序列拼装 & 频谱工具 ===
+# === ADD: sequence assembly & spectral utilities ===
 def _gather_sequences_from_batch(
     pred,
     y,
@@ -1074,28 +1073,28 @@ def _gather_sequences_from_batch(
     debug=False,
 ):
     """
-    从当前 batch 按 (line, trace) 聚合，按 tau 升序凑出时间序列。
+English implementation note for the surrounding code.
 
-    返回:
-      seq_pred, seq_true: [M, T, C]  (pad 到同长度)
-      若没有任何组满足 min_len，则返回 (None, None)
+    return:
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
 
-    改动点：
-      - denormalize_fn 允许为 None（identity）
-      - 可控 detach（默认 False，允许谱/lowfreq loss 回传到 pred）
-      - debug 输出 batch 内可用 trace 数量与长度分布
+    changes: 
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import torch
     import numpy as np
 
-    # --------- 兼容 metas 为 list/tuple，且 meta 结构为 (l,t,tau,is_well) ----------
+    # Implementation note for the surrounding code.
     B = int(pred.shape[0])
     C = int(pred.shape[1])
 
     groups = {}  # (l,t) -> [(tau, idx)]
     for i in range(B):
         m = metas[i]
-        # 保险：meta 可能不是 tuple/list
+        # Implementation note for the surrounding code.
         if not isinstance(m, (list, tuple)) or len(m) < 3:
             continue
         l, t, tau = int(m[0]), int(m[1]), int(m[2])
@@ -1115,7 +1114,7 @@ def _gather_sequences_from_batch(
         if denormalize_fn is None:
             return z
         out = denormalize_fn(z)
-        # 如果外部 denormalize_fn 返回了 numpy，会断梯度；这里强制转回 torch（但梯度已断）
+        # Implementation note for the surrounding code.
         if torch.is_tensor(out):
             return out
         return torch.as_tensor(out, device=z.device, dtype=z.dtype)
@@ -1154,7 +1153,7 @@ def _gather_sequences_from_batch(
     if len(seq_pred_list) == 0:
         return None, None
 
-    # --------- pad 到同长度 ----------
+    # Implementation note for the surrounding code.
     T_max = max(int(s.shape[0]) for s in seq_pred_list)
 
     def _pad_to(s, T):
@@ -1183,8 +1182,8 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
                              mode: str = "centroid+bw",
                              reduce: str = "mean"):
     """
-    seq_*: [M, T, C]，按时间维做 rFFT；比较频谱质心 & -6dB 带宽（只比形状）
-    返回: freq_loss (scalar)
+English implementation note for the surrounding code.
+    return: freq_loss (scalar)
     """
     assert seq_pred.shape == seq_true.shape, "pred/true shape mismatch for spectral loss"
     M, T, C = seq_pred.shape
@@ -1193,46 +1192,46 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
     Ft = torch.fft.rfft(seq_true, dim=1)
     Pp = (Fp.real**2 + Fp.imag**2) + 1e-12
     Pt = (Ft.real**2 + Ft.imag**2) + 1e-12
-    # 归一化功率谱（比较形状）
+    # Implementation note for the surrounding code.
     Pp = Pp / Pp.sum(dim=1, keepdim=True)
     Pt = Pt / Pt.sum(dim=1, keepdim=True)
-    # 频率轴 & 频带裁剪
-    # rfftfreq: 长度 = T//2 + 1
+    # frequency axis & band cropping
+    # Implementation note for the surrounding code.
     freq = torch.fft.rfftfreq(T, d=1.0/fs_hz).to(Pp.device)   # [F]
     fmin, fmax = fband
     band = (freq >= fmin) & (freq <= fmax)
-    if band.sum() < 4:  # 带宽太窄直接跳过
+    if band.sum() < 4:  # Implementation note for the surrounding code.
         return seq_pred.new_tensor(0.0)
 
     Pp_b = Pp[:, band, :]   # [M,K,C]
     Pt_b = Pt[:, band, :]
     f_b  = freq[band].view(1, -1, 1)  # [1,K,1]
 
-    # 频谱质心
+    # spectral centroid
     cen_p = (Pp_b * f_b).sum(dim=1) / (Pp_b.sum(dim=1) + 1e-12)  # [M,C]
     cen_t = (Pt_b * f_b).sum(dim=1) / (Pt_b.sum(dim=1) + 1e-12)
 
-    # -6dB 带宽（相对峰值），用线性插值近似
+    # Implementation note for the surrounding code.
     def _bw_6db(P):
-        # P: [M,K,C] 已裁带
+        # Implementation note for the surrounding code.
         M, K, C = P.shape
-        # 归一化相对幅度
+        # Implementation note for the surrounding code.
         peak = P.max(dim=1, keepdim=True).values  # [M,1,C]
         thr  = peak / math.sqrt(2.0)             # [M,1,C]
-        # 找峰位置
+        # Implementation note for the surrounding code.
         idx_peak = P.argmax(dim=1)               # [M,C]
-        # 左右过阈近似（逐通道逐样本 loop，K 通常不大，开销很小）
+        # Implementation note for the surrounding code.
         bw = torch.zeros(M, C, device=P.device, dtype=P.dtype)
         fb = f_b[0,:,0]  # [K]
         for m in range(M):
             for c in range(C):
                 k0 = int(idx_peak[m, c].item())
-                # 向左
+                # Implementation note for the surrounding code.
                 iL = k0
                 while iL > 0 and P[m, iL, c] >= thr[m, 0, c]:
                     iL -= 1
                 fL = fb[iL]
-                # 向右
+                # Implementation note for the surrounding code.
                 iR = k0
                 while iR < K-1 and P[m, iR, c] >= thr[m, 0, c]:
                     iR += 1
@@ -1243,7 +1242,7 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
     bw_p = _bw_6db(Pp_b)
     bw_t = _bw_6db(Pt_b)
 
-    # L1/L2 都可，这里用 L1 更鲁棒
+    # Implementation note for the surrounding code.
     cen_loss = (cen_p - cen_t).abs()
     bw_loss  = (bw_p  - bw_t ).abs()
     if reduce == "mean":
@@ -1253,10 +1252,10 @@ def _spectral_stats_and_loss(seq_pred: torch.Tensor,
 
 def _safe_corrcoef_1d(a: np.ndarray, b: np.ndarray, eps=1e-12) -> float:
     """
-    更稳的 1D NCC：
-    - 自动过滤 NaN/Inf
-    - 方差太小直接返回 nan（退化，不要硬算出 1.0）
-    - 最终裁剪到 [-1, 1]（防数值飘）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
 
@@ -1266,7 +1265,7 @@ def _safe_corrcoef_1d(a: np.ndarray, b: np.ndarray, eps=1e-12) -> float:
     if a.size < 2 or b.size < 2:
         return float("nan")
 
-    # 过滤非有限值（非常关键）
+    # Implementation note for the surrounding code.
     m = np.isfinite(a) & np.isfinite(b)
     if m.sum() < 2:
         return float("nan")
@@ -1286,7 +1285,7 @@ def _safe_corrcoef_1d(a: np.ndarray, b: np.ndarray, eps=1e-12) -> float:
     cov = float(np.mean(da * db))
     ncc = cov / (np.sqrt(va * vb) + float(eps))
 
-    # 防止数值误差略微超界
+    # Implementation note for the surrounding code.
     if not np.isfinite(ncc):
         return float("nan")
     ncc = float(np.clip(ncc, -1.0, 1.0))
@@ -1295,9 +1294,9 @@ def _safe_corrcoef_1d(a: np.ndarray, b: np.ndarray, eps=1e-12) -> float:
 
 def _build_seq_dict_from_batch(pred, y, metas, denorm_t, min_len=16, use_diff=False):
     """
-    聚合 batch 得到 dict[(l,t)] -> (taus, MU, YY)  (numpy)
+English implementation note for the surrounding code.
     pred/y: torch [B,3], metas: list of (l,t,tau,is_well)
-    denorm_t: torch版反归一化函数 (tensor->tensor)
+English implementation note for the surrounding code.
     """
     groups = {}
     B = pred.shape[0]
@@ -1326,18 +1325,18 @@ def _build_seq_dict_from_batch(pred, y, metas, denorm_t, min_len=16, use_diff=Fa
     return out
 def sanity_corr_inputs(a, b, name="CONT"):
     """
-    连续性/NCC 输入健检：
-    - 展平
-    - 过滤 NaN/Inf
-    - 打印方差、长度、是否同一对象（同一块内存/引用）
-    - 方差过小给出警告（NCC 易退化为 nan 或假 1.0）
+    continuity/NCC input sanity check: 
+    - flatten
+    - filter NaN/Inf
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
 
     a0 = np.asarray(a)
     b0 = np.asarray(b)
 
-    # 展平（用 float64 稳一点）
+    # Implementation note for the surrounding code.
     a = np.asarray(a0, dtype=np.float64).reshape(-1)
     b = np.asarray(b0, dtype=np.float64).reshape(-1)
 
@@ -1345,7 +1344,7 @@ def sanity_corr_inputs(a, b, name="CONT"):
         print(f"[{name}][WARN] empty arrays (a.size={a.size}, b.size={b.size})")
         return
 
-    # 过滤非有限值
+    # Implementation note for the surrounding code.
     m = np.isfinite(a) & np.isfinite(b)
     a_f = a[m]
     b_f = b[m]
@@ -1358,7 +1357,7 @@ def sanity_corr_inputs(a, b, name="CONT"):
     va = float(np.var(a_f))
     vb = float(np.var(b_f))
 
-    # 是否同一对象 / 是否共享内存（帮助排查“拿同一个数组算相关=1.0”）
+    # Implementation note for the surrounding code.
     same_object = (a0 is b0)
     share_mem = False
     try:
@@ -1377,8 +1376,8 @@ def compute_continuity_metrics(seq_dict, mode="trace", channel_wise=True,
                                min_common=8, sanity=False, var_eps=1e-12):
     """
     seq_dict: {(l,t):(taus, MU, YY)}
-    mode: "trace" 比 (l,t) vs (l,t+1); "line" 比 (l,t) vs (l+1,t)
-    返回：dict:
+English implementation note for the surrounding code.
+    return: dict:
       - mean_ncc, mean_l1
       - (optional) ncc_ch, l1_ch
       - pairs: used neighbor pairs count
@@ -1402,7 +1401,7 @@ def compute_continuity_metrics(seq_dict, mode="trace", channel_wise=True,
             continue
         taus2, MU2, _ = seq_dict[nb]
 
-        # 对齐 tau（取交集）
+        # Implementation note for the surrounding code.
         set1 = {int(x): i for i, x in enumerate(taus)}
         set2 = {int(x): i for i, x in enumerate(taus2)}
         common = sorted(set(set1.keys()) & set(set2.keys()))
@@ -1428,7 +1427,7 @@ def compute_continuity_metrics(seq_dict, mode="trace", channel_wise=True,
         va = float(np.var(a))
         vb = float(np.var(b))
         if (va < float(var_eps)) or (vb < float(var_eps)):
-            # 方差太小：NCC 退化，直接跳过（避免 nan 或 1.0 假象）
+            # Implementation note for the surrounding code.
             skipped_var += 1
             continue
 
@@ -1446,9 +1445,9 @@ def compute_continuity_metrics(seq_dict, mode="trace", channel_wise=True,
         # ----------------------------
         if channel_wise:
             C = int(A.shape[1])
-            # 防呆：如果不是 3 通道，也能跑
+            # Implementation note for the surrounding code.
             if C != 3:
-                # 动态扩展容器
+                # dynamically expand containers
                 if len(ncc_ch) != C:
                     ncc_ch = [[] for _ in range(C)]
                     l1_ch  = [[] for _ in range(C)]
@@ -1463,7 +1462,7 @@ def compute_continuity_metrics(seq_dict, mode="trace", channel_wise=True,
                 vac = float(np.var(ac))
                 vbc = float(np.var(bc))
                 if (vac < float(var_eps)) or (vbc < float(var_eps)):
-                    continue  # 单通道退化，跳过该通道 NCC
+                    continue  # Implementation note for the surrounding code.
 
                 ncc_c = _safe_corrcoef_1d(ac, bc)
                 l1_c  = float(np.mean(np.abs(A[:, c] - B[:, c])))
@@ -1505,18 +1504,18 @@ class VolumeWindowDataset(Dataset):
                  line_stride=1, trace_stride=1, phase_line=0, phase_trace=0,
                  wells=None, well_radius=6, far_keep_ratio=0.1,
                  fdom_bl=8.0, dt=0.001, build_bl=True,
-                 line_ctx=1,                      # 2.5D 横向上下文条数（奇数）
-                 add_line_diff: bool = False,  # ✅ 是否拼接 center-diff 特征（推荐 True 来抓局部结构）
+                 line_ctx=1,                      # 2.5D number of lateral context lines(odd number)
+                 add_line_diff: bool = False,  # Implementation note for the surrounding code.
                  force_lt=None,
-                 defer_norm=False,                # True: 先不算 norm，split 后再调用 recompute_norm_stats
+                 defer_norm=False,                # Implementation note for the surrounding code.
                  norm_seed=12345,
                  norm_max_samples=20000,
-                 norm_indices=None,               # ✅ 如果传了：只用这些 sample indices 计算 mean/std（推荐传 train_indices）
-                 norm_exclude_lt=None,            # ✅ 统计时排除某些 (l,t)（比如 LOOW & 2.5D 邻域）
+                 norm_indices=None,               # Implementation note for the surrounding code.
+                 norm_exclude_lt=None,            # Implementation note for the surrounding code.
                  # ✅ NEW: Scheme-A norm (angle × time-in-window)
-                 norm_scheme: str = "angle_time",  # "angle_time"(推荐) / "angle"（旧）
-                 norm_std_floor: float = 1e-3,  # std 下限，防止极弱点放大爆炸
-                 norm_gain_cap: float = 20.0,  # 最大放大倍数 cap（1/std 的上限）
+                 norm_scheme: str = "angle_time",  # Implementation note for the surrounding code.
+                 norm_std_floor: float = 1e-3,  # Implementation note for the surrounding code.
+                 norm_gain_cap: float = 20.0,  # Implementation note for the surrounding code.
                  ):
         super().__init__()
         assert stack4d.shape[0] == mod4d.shape[0] and stack4d.shape[1] == mod4d.shape[1] and stack4d.shape[3] == \
@@ -1542,9 +1541,9 @@ class VolumeWindowDataset(Dataset):
         self.well_radius = int(well_radius)
         self.far_keep_ratio = float(far_keep_ratio)
 
-        # ✅ line_ctx 设置
+        # Implementation note for the surrounding code.
         self.line_ctx = int(line_ctx)
-        assert self.line_ctx % 2 == 1 and self.line_ctx >= 1, "line_ctx 必须是 >=1 的奇数（1/3/5/7...）"
+        assert self.line_ctx % 2 == 1 and self.line_ctx >= 1, "English implementation note for the surrounding code."
         self.add_line_diff = bool(add_line_diff)
         # ✅ FORCE_LT PATCH
         self.force_lt = force_lt
@@ -1563,13 +1562,13 @@ class VolumeWindowDataset(Dataset):
             # 1) build ricker and normalize (important!)
             w = _ricker_vec(L=101, dt=dt, fdom=fdom_bl).astype(np.float32)
 
-            # ✅ 推荐：L2 能量归一化（避免卷积后幅值整体漂移）
+            # Implementation note for the surrounding code.
             w = w / (np.sqrt(np.sum(w * w)) + 1e-12)
 
             bl = np.empty_like(self.mod, dtype=np.float32)
 
             # 2) convolve along time, then amplitude-correct per (l,t,c)
-            #    目的：带限，但尽量保持每条曲线的 RMS 幅值不变
+            # Implementation note for the surrounding code.
             eps = 1e-8
             for il in range(Lm):
                 for it in range(Tn):
@@ -1598,7 +1597,7 @@ class VolumeWindowDataset(Dataset):
             lt = [(l, t) for l in range(L) for t in range(T)
                   if (l % self.line_stride == self.phase_line) and (t % self.trace_stride == self.phase_trace)]
         else:
-            assert self.wells is not None and len(self.wells) > 0, "wellhood 模式需要 wells"
+            assert self.wells is not None and len(self.wells) > 0, "English implementation note for the surrounding code."
             mask = np.zeros((L, T), dtype=bool)
             wells_valid = []
             for wl, wt in self.wells:
@@ -1619,8 +1618,8 @@ class VolumeWindowDataset(Dataset):
             lt = near + far
             random.shuffle(lt)
         # ==========================================================
-        # ✅ FORCE_LT PATCH: 确保某些 (l,t) 一定出现在 lt 中
-        #   - 解决 mode='wellhood' 时稀疏采样导致 LOOW core/区域缺失
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         # ==========================================================
         if self.force_lt is not None and len(self.force_lt) > 0:
             extra = []
@@ -1637,7 +1636,7 @@ class VolumeWindowDataset(Dataset):
                 added = after - before
                 if added > 0:
                     print(f"[DATA][FORCE_LT] added {added} forced (l,t) into lt (total unique lt={after}).")
-                # 顺序不重要：直接 list
+                # Implementation note for the surrounding code.
                 lt = list(lt_set)
         samples = []
         for (l, t) in lt:
@@ -1673,10 +1672,10 @@ class VolumeWindowDataset(Dataset):
         labeled = int(self.is_well_sample.sum())
         print(f"[REPORT] samples={len(self.samples)}, well_labeled={labeled} ({labeled / max(1, len(self.samples)) * 100:.2f}%)")
         if labeled == 0:
-            print("[WARN] 没有井样本被标注：检查井映射或增大 --well_radius")
+            print("[WARN] no well samples were marked: check well mapping or increase --well_radius")
 
         if self.mod_bl is None:
-            raise RuntimeError("mod_bl is None: 请把 VolumeWindowDataset(..., build_bl=True) 打开，BNN-VAIM 需要带限标签。")
+            raise RuntimeError("English implementation note for the surrounding code.")
 
         # =========================
         # ✅ normalization stats
@@ -1703,9 +1702,9 @@ class VolumeWindowDataset(Dataset):
                 verbose=True
             )
         else:
-            print("[DATA][NORM] defer_norm=True: 请在 split 后调用 ds_all.recompute_norm_stats(train_indices=...)")
+            print("English implementation note for the surrounding code.")
 
-    # ✅ 2.5D patch 提取：返回 [A, line_ctx, win] 或 [2A, line_ctx, win]
+    # Implementation note for the surrounding code.
     def _get_x_patch_25d(self, l, t, tau):
         h = self.win // 2
         hl = self.line_ctx // 2
@@ -1728,10 +1727,10 @@ class VolumeWindowDataset(Dataset):
     def recompute_norm_stats(self, train_indices=None, exclude_lt=None,
                              max_samples=20000, seed=12345, verbose=True):
         """
-        ✅ Scheme A（推荐）：按 角度×窗内时间位置 统计 mean/std
+English implementation note for the surrounding code.
           - X_mean: [A, win]
           - X_std : [A, win]
-        统计维度：对 (sample 维 + line_ctx 维) 求均值/方差
+English implementation note for the surrounding code.
         """
         rng = np.random.default_rng(int(seed))
 
@@ -1789,13 +1788,13 @@ class VolumeWindowDataset(Dataset):
             X_mean = Xc.mean(axis=(0, 2))
             X_std = Xc.std(axis=(0, 2))
         else:
-            # fallback：旧版（仅按角度）
+            # Implementation note for the surrounding code.
             # mean/std over ns(0), line_ctx(2), win(3) -> [A]
             X_mean = Xc.mean(axis=(0, 2, 3))
             X_std = Xc.std(axis=(0, 2, 3))
 
         # -----------------------------
-        # ✅ 防爆：std_floor + gain_cap
+        # Implementation note for the surrounding code.
         #   gain = 1/std ≤ gain_cap  => std ≥ 1/gain_cap
         # -----------------------------
         std_floor = float(getattr(self, "norm_std_floor", 1e-3))
@@ -1807,7 +1806,7 @@ class VolumeWindowDataset(Dataset):
         X_mean = X_mean.astype(np.float32)
 
         # -----------------------------
-        # ✅ Y stats（保持不变：按通道）
+        # Implementation note for the surrounding code.
         # -----------------------------
         self.Y_mean = Yc.mean(axis=(0, 1))  # (3,)
         self.Y_std = Yc.std(axis=(0, 1))
@@ -1818,7 +1817,7 @@ class VolumeWindowDataset(Dataset):
         self._norm_ready = True
 
         if self.Y_std[2] < 1e-6:
-            print("[WARN] RHOB 通道近似常数/全零，请确认 Mod 第3通道是否正确。")
+            print("English implementation note for the surrounding code.")
 
         if verbose:
             if self.X_mean.ndim == 2:
@@ -1838,20 +1837,20 @@ class VolumeWindowDataset(Dataset):
 
         l, t, tau = self.samples[idx]
 
-        # ---- 2.5D 地震窗口 ----
+        # ---- 2.5D seismic window ----
         X = self._get_x_patch_25d(int(l), int(t), int(tau))  # [A, line_ctx, win]
 
-        # ✅ Scheme A：按 (A, win) 标准化，line_ctx 维广播
+        # Implementation note for the surrounding code.
         if self.X_mean.ndim == 2:
             # X_mean/std: [A, win]
             Xn = (X - self.X_mean[:, None, :]) / self.X_std[:, None, :]
         else:
-            # fallback：角度-only
+            # Implementation note for the surrounding code.
             Xn = (X - self.X_mean[:, None, None]) / self.X_std[:, None, None]
 
         Xn = torch.from_numpy(Xn.astype(np.float32)).float()
 
-        # ---- sequence 标签（win,3） ----
+        # Implementation note for the surrounding code.
         h = self.win // 2
 
         # (3, win)
@@ -1862,7 +1861,7 @@ class VolumeWindowDataset(Dataset):
         yn = (y - self.Y_mean[None, :]) / self.Y_std[None, :]
         yn = torch.from_numpy(yn.astype(np.float32)).float()
 
-        # ---- 带限标签（win,3）----
+        # ---- band-limited labels(win,3)----
         y_bl = self.mod_bl[int(l), int(t), self.props_idx, tau - h: tau + h + 1]
         y_bl = np.transpose(y_bl, (1, 0))  # (win,3)
 
@@ -1882,9 +1881,9 @@ class VolumeWindowDataset(Dataset):
 
 class FullGridDatasetForSection(Dataset):
     """
-    在 dataset 侧补齐 full-grid 的 (l,t,tau)，保证 __getitem__ 真正能取到每个网格点的 X/y。
-    - 复用 base_ds 的 _get_x_patch_25d / mod / mod_bl / 归一化参数
-    - 自己维护 samples / is_well_sample，避免索引错乱
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+    - maintain separately samples / is_well_sample, avoidindex mismatch
     """
     def __init__(self, base_ds, samples_full, is_well_full=None):
         self.base = base_ds
@@ -1896,8 +1895,8 @@ class FullGridDatasetForSection(Dataset):
             self.is_well_sample = np.asarray(is_well_full, dtype=bool)
             assert len(self.is_well_sample) == len(self.samples)
 
-        # 复用 base_ds 的必要属性（让 __getitem__ 同逻辑）
-        # 注意：这里不深拷贝大数组，只引用
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         self._norm_ready = getattr(base_ds, "_norm_ready", True)
 
         self.X_mean = base_ds.X_mean
@@ -1920,7 +1919,7 @@ class FullGridDatasetForSection(Dataset):
         self.mod_bl = base_ds.mod_bl
         self.props_idx = base_ds.props_idx
 
-        # 复用 base_ds 的 patch 提取函数
+        # Implementation note for the surrounding code.
         self._get_x_patch_25d = base_ds._get_x_patch_25d
 
     def __len__(self):
@@ -1932,10 +1931,10 @@ class FullGridDatasetForSection(Dataset):
 
         l, t, tau = self.samples[idx]
 
-        # ---- 2.5D 地震窗口 ----
+        # ---- 2.5D seismic window ----
         X = self._get_x_patch_25d(int(l), int(t), int(tau))  # [A, line_ctx, win]
 
-        # ✅ Scheme A：按 (A, win) 标准化，line_ctx 维广播
+        # Implementation note for the surrounding code.
         if self.X_mean.ndim == 2:
             Xn = (X - self.X_mean[:, None, :]) / self.X_std[:, None, :]
         else:
@@ -1943,7 +1942,7 @@ class FullGridDatasetForSection(Dataset):
 
         Xn = torch.from_numpy(Xn.astype(np.float32)).float()
 
-        # ---- sequence 标签（win,3） ----
+        # Implementation note for the surrounding code.
         h = self.win // 2
 
         # (3, win)
@@ -1954,7 +1953,7 @@ class FullGridDatasetForSection(Dataset):
         yn = (y - self.Y_mean[None, :]) / self.Y_std[None, :]
         yn = torch.from_numpy(yn.astype(np.float32)).float()
 
-        # ---- 带限标签（win,3）----
+        # ---- band-limited labels(win,3)----
         y_bl = self.mod_bl[int(l), int(t), self.props_idx, tau - h: tau + h + 1]
         y_bl = np.transpose(y_bl, (1, 0))  # (win,3)
 
@@ -1976,16 +1975,16 @@ class FullGridDatasetForSection(Dataset):
 
 class DepthwiseTemporalConv(nn.Module):
     """
-    把输入 (B, A*W) 视为 (B, A, W)，做两层 depthwise 1D conv（第二层 dilation=2）并短残差，
-    最后再展平回 (B, A*W)。A: 角度数；W: 窗长
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     def __init__(self, n_angles: int, win: int, kernel_size: int = 9):
         super().__init__()
         pad1 = kernel_size // 2
-        # 每个角度独立卷积
+        # Implementation note for the surrounding code.
         self.conv1 = nn.Conv1d(n_angles, n_angles, kernel_size=kernel_size,
                                padding=pad1, groups=n_angles, bias=True)
-        # 膨胀卷积，进一步扩大感受野，缓解“滞后”
+        # Implementation note for the surrounding code.
         self.conv2 = nn.Conv1d(n_angles, n_angles, kernel_size=5,
                                padding=4, dilation=2, groups=n_angles, bias=True)
         nn.init.kaiming_normal_(self.conv1.weight, nonlinearity="relu")
@@ -2001,20 +2000,20 @@ class DepthwiseTemporalConv(nn.Module):
         B = x_flat.size(0)
         x = x_flat.view(B, self.n_angles, self.win)       # (B, A, W)
         y = self.act(self.conv1(x))
-        y = self.act(self.conv2(y)) + y                   # 短残差
-        return y.reshape(B, self.n_angles * self.win)     # 回到 (B, A*W)
+        y = self.act(self.conv2(y)) + y                   # Implementation note for the surrounding code.
+        return y.reshape(B, self.n_angles * self.win)     # Implementation note for the surrounding code.
 
 class CNNEncoder1D(nn.Module):
     """
-    简单 1D-CNN 编码器：
-    输入 X: [B, A, win]，输出一个 feature 向量 h: [B, feat_dim]
+    simple 1D-CNN encoder: 
+English implementation note for the surrounding code.
     """
     def __init__(self, n_angles: int, win: int, feat_dim: int = 256):
         super().__init__()
         self.n_angles = n_angles
         self.win = win
 
-        # 你可以按需要调通道数 / kernel_size
+        # Implementation note for the surrounding code.
         self.conv1 = nn.Conv1d(n_angles, 64, kernel_size=7, padding=3)
         self.conv2 = nn.Conv1d(64, 128, kernel_size=5, padding=2)
         self.conv3 = nn.Conv1d(128, 128, kernel_size=5, padding=2)
@@ -2022,8 +2021,8 @@ class CNNEncoder1D(nn.Module):
         self.act = nn.ReLU(inplace=True)
         self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
 
-        # 全局平均池化 + 线性映射到 feat_dim
-        # 池化 3 次，下采样 2^3=8 倍，长度约 win/8
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         self.proj = nn.Linear(128, feat_dim)
 
     def forward(self, X_flat: torch.Tensor) -> torch.Tensor:
@@ -2039,15 +2038,15 @@ class CNNEncoder1D(nn.Module):
         x = self.pool(self.act(self.conv2(x)))   # [B,128,L2]
         x = self.pool(self.act(self.conv3(x)))   # [B,128,L3]
 
-        # 沿 time 维做全局平均池化 -> [B,128]
+        # Implementation note for the surrounding code.
         x = x.mean(dim=-1)
         h = self.proj(x)                        # [B, feat_dim]
         return h
 
 class CNNEncoder2D25D(nn.Module):
     """
-    2.5D 2D-CNN 编码器：
-    输入 X: [B, C_in, line_ctx, win]
+    2.5D 2D-CNN encoder: 
+English implementation note for the surrounding code.
     """
     def __init__(self, in_ch: int, line_ctx: int, win: int, feat_dim: int = 256):
         super().__init__()
@@ -2095,7 +2094,7 @@ class CNNEncoder2D25D(nn.Module):
 
 class SmallBNNHeadSeqMVT(nn.Module):
     """
-    输出：
+    output: 
       mu:          (B, win, 3)
       chol_params: (B, win, 6)
       kl:          scalar tensor
@@ -2112,7 +2111,7 @@ class SmallBNNHeadSeqMVT(nn.Module):
                  bayes: bool = True,
                  n_comp: int = 3):
         super().__init__()
-        assert out_dim == 3, "当前实现固定针对 3 参数 (VP, VS, RHOB)"
+        assert out_dim == 3, "English implementation note for the surrounding code."
         self.bayes = bool(bayes)
         self.out_dim = int(out_dim)
         self.win = int(win)
@@ -2308,25 +2307,25 @@ from torch.utils.data import Sampler, Subset
 
 class WellBalancedBatchSampler(Sampler):
     """
-    保证每批至少含 min_well 个井样本（井样本不足时尽力而为）
+English implementation note for the surrounding code.
 
-    ✅ trace-block 采样（纵向 tau 连续）
-    - trace_index_table: dict[(l,t)] -> [global idx...]，且已按 tau 排序
-    - trace_block: 每个 trace 一次取多少个 tau 点
-    - prefer_consecutive: True 时取连续 tau 块
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
 
-    ✅ line-block 采样（横向 line 连续）
-    - line_index_table: dict[(t,tau)] -> [global idx...]，且已按 l 排序
-    - line_block: 每次从同一个 (t,tau) 取多少个相邻 l
-    - line_quota: 每个 batch 里用于 line-block 的比例(0~1)，建议 0.2~0.4（有 patch 时更低）
-    - prefer_line_consecutive: True 时取连续 l 块
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
 
-    ✅ NEW: 2D patch 注入（line × tau 成片）
-    - samples_full: ds.samples，要求 samples_full[global_idx] -> (l,t,tau)
-    - grid_index_table: dict[(l,t,tau)] -> global_idx（可不传，传 samples_full 即自动建）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     - patch_line_block / patch_tau_block / patch_tau_stride
-    - patch_quota: 每个 batch 预留给 patch 的比例（建议 0.4~0.6）
-    - patch_min_keep: patch 命中点太少则丢弃（避免空 patch）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
 
     def __init__(self,
@@ -2346,7 +2345,7 @@ class WellBalancedBatchSampler(Sampler):
                  # --- line-block ---
                  line_index_table: dict | None = None,
                  line_block: int = 16,
-                 line_quota: float = 0.7,              # 建议 0.2~0.4；0=关闭
+                 line_quota: float = 0.7,              # Implementation note for the surrounding code.
                  prefer_line_consecutive: bool = True,
 
                  # --- ✅ NEW: 2D patch (line × tau) ---
@@ -2355,8 +2354,8 @@ class WellBalancedBatchSampler(Sampler):
                  patch_line_block: int = 16,
                  patch_tau_block: int = 8,
                  patch_tau_stride: int = 1,
-                 patch_quota: float = 0.0,             # 0=关闭，建议 0.4~0.6
-                 patch_min_keep: int = 32,             # patch 至少命中多少点才算有效
+                 patch_quota: float = 0.0,             # Implementation note for the surrounding code.
+                 patch_min_keep: int = 32,             # Implementation note for the surrounding code.
 
                  # debug
                  debug_every: int = 0,
@@ -2443,7 +2442,7 @@ class WellBalancedBatchSampler(Sampler):
 
         self._use_patch = (self.patch_quota > 0.0) and (self.patch_line_block > 1) and (self.patch_tau_block > 1)
 
-        # 若未给 grid_index_table，但给了 samples_full：自动为 subset 建映射
+        # Implementation note for the surrounding code.
         self._lmin = self._lmax = None
         self._taumin = self._taumax = None
         self._tmin = self._tmax = None
@@ -2455,7 +2454,7 @@ class WellBalancedBatchSampler(Sampler):
 
         if self._use_patch:
             if self.grid_index_table is None:
-                # 自动建 subset 映射（只针对 subset indices，避免全量）
+                # Implementation note for the surrounding code.
                 g = {}
                 lvals, tvals, tauvals = [], [], []
                 for gi in self.indices:
@@ -2469,7 +2468,7 @@ class WellBalancedBatchSampler(Sampler):
                     self._tmin, self._tmax = int(min(tvals)), int(max(tvals))
                     self._taumin, self._taumax = int(min(tauvals)), int(max(tauvals))
             else:
-                # 尝试估计范围（可选）
+                # Implementation note for the surrounding code.
                 try:
                     keys = list(self.grid_index_table.keys())
                     if len(keys) > 0:
@@ -2486,12 +2485,12 @@ class WellBalancedBatchSampler(Sampler):
                   f"stride={self.patch_tau_stride}, quota={self.patch_quota:.2f}, "
                   f"grid={len(self.grid_index_table) if self.grid_index_table is not None else 0}")
 
-        # =============== 原始告警 ===============
+        # Implementation note for the surrounding code.
         if len(self.well_idx) == 0:
-            print("[WARN][Sampler] 训练集中没有井样本，min_well 约束无效。")
+            print("English implementation note for the surrounding code.")
         elif len(self.well_idx) < self.min_well:
-            print(f"[WARN][Sampler] 井样本总数 nW={len(self.well_idx)} < min_well={self.min_well}，"
-                  f"无法保证每批至少 {self.min_well} 个井样本（只能做到每批最多 {len(self.well_idx)}）。")
+            print(f"[WARN][Sampler] total well samples nW={len(self.well_idx)} < min_well={self.min_well}, "
+                  f"cannot guarantee at least {self.min_well} well samples per batch; at most {len(self.well_idx)} can be used per batch.")
 
     def __len__(self):
         total = len(self.indices)
@@ -2518,7 +2517,7 @@ class WellBalancedBatchSampler(Sampler):
             return pick
 
     def _take_block_from_line(self, key_tt, k, rng):
-        """key_tt = (t, tau)，idxs 已按 l 排序"""
+        """English implementation note for the surrounding code."""
         idxs = self.line_index_table.get(key_tt, [])
         n = len(idxs)
         if n <= 0 or k <= 0:
@@ -2536,8 +2535,8 @@ class WellBalancedBatchSampler(Sampler):
 
     def _take_2d_patch(self, l_center: int, t0: int, tau_center: int):
         """
-        以 (l_center,t0,tau_center) 为中心，取 line×tau patch（按 stride）
-        返回 global idx list（只返回 table 中存在的点）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
         """
         if self.grid_index_table is None:
             return []
@@ -2545,15 +2544,15 @@ class WellBalancedBatchSampler(Sampler):
         half_l = self.patch_line_block // 2
         half_tau = self.patch_tau_block // 2
 
-        # line 范围（尽量对称）
+        # Implementation note for the surrounding code.
         l_start = int(l_center - half_l)
         ls = [l_start + i for i in range(self.patch_line_block)]
 
-        # tau 范围（按 stride）
+        # Implementation note for the surrounding code.
         tau_start = int(tau_center - half_tau * self.patch_tau_stride)
         taus = [tau_start + i * self.patch_tau_stride for i in range(self.patch_tau_block)]
 
-        # 若估计过范围，则做轻度裁剪，提升命中率
+        # Implementation note for the surrounding code.
         if self._lmin is not None:
             ls = [l for l in ls if (self._lmin <= l <= self._lmax)]
         if self._taumin is not None:
@@ -2580,7 +2579,7 @@ class WellBalancedBatchSampler(Sampler):
         n_batches = len(self)
 
         # =========================================================
-        # trace-block 分支
+        # Implementation note for the surrounding code.
         # =========================================================
         if self._use_trace_block:
             well_traces = list(self.well_traces)
@@ -2617,11 +2616,11 @@ class WellBalancedBatchSampler(Sampler):
                         if ii not in chosen_set:
                             chosen_set.add(ii)
                             chosen.append(ii)
-                            if len(chosen) >= cur_bs * 3:  # 防止极端情况下爆炸
+                            if len(chosen) >= cur_bs * 3:  # Implementation note for the surrounding code.
                                 break
 
                 # =====================================================
-                # (0) ✅ 先注入 2D patch（line × tau）
+                # Implementation note for the surrounding code.
                 # =====================================================
                 patch_used = 0
                 if self._use_patch and self.grid_index_table is not None and self.samples_full is not None:
@@ -2635,7 +2634,7 @@ class WellBalancedBatchSampler(Sampler):
                         if len(chosen) >= cur_bs:
                             break
 
-                        # 尝试多次找“命中率高”的 patch
+                        # Implementation note for the surrounding code.
                         ok = False
                         for _try in range(20):
                             gi0 = int(rng.choice(self.indices))
@@ -2646,7 +2645,7 @@ class WellBalancedBatchSampler(Sampler):
                                 ok = True
                                 break
                         if not ok:
-                            # 实在找不到也塞一次（可能数据稀疏）
+                            # Implementation note for the surrounding code.
                             gi0 = int(rng.choice(self.indices))
                             l0, t0, tau0 = self.samples_full[int(gi0)]
                             pick = self._take_2d_patch(int(l0), int(t0), int(tau0))
@@ -2655,12 +2654,12 @@ class WellBalancedBatchSampler(Sampler):
                     patch_used = len(chosen) - before0
 
                 # =====================================================
-                # (0.5) ✅ 再注入 line-block（避免小 batch 强行 16）
+                # Implementation note for the surrounding code.
                 # =====================================================
                 line_used = 0
                 if self._use_line_block and len(self.line_keys) > 0 and len(chosen) < cur_bs:
 
-                    # 只用非井 quota 塞 line-block，避免后面补井/补非井把它截碎
+                    # Implementation note for the surrounding code.
                     max_line_cap = max(0, int(kn))
                     if max_line_cap >= 3:
                         n_line = int(round(cur_bs * self.line_quota))
@@ -2688,11 +2687,11 @@ class WellBalancedBatchSampler(Sampler):
 
                                 line_used = len(chosen) - before1
 
-                # 当前 well 数
+                # Implementation note for the surrounding code.
                 wcnt = int(self.wflags_full[np.asarray(chosen, dtype=np.int64)].sum()) if len(chosen) > 0 else 0
 
                 # =====================================================
-                # (1) 再补井点（trace-block）
+                # Implementation note for the surrounding code.
                 # =====================================================
                 if kw > 0 and len(well_traces) > 0:
                     guard = 0
@@ -2714,7 +2713,7 @@ class WellBalancedBatchSampler(Sampler):
                             new = chosen[before:]
                             wcnt += int(self.wflags_full[np.asarray(new, dtype=np.int64)].sum())
 
-                # 兜底：井点不足
+                # Implementation note for the surrounding code.
                 if kw > 0 and wcnt < kw and len(self.well_idx) > 0 and len(chosen) < cur_bs:
                     need = kw - wcnt
                     pick = rng.choice(self.well_idx, size=int(need * 3), replace=True).tolist()
@@ -2722,7 +2721,7 @@ class WellBalancedBatchSampler(Sampler):
                     wcnt = int(self.wflags_full[np.asarray(chosen, dtype=np.int64)].sum())
 
                 # =====================================================
-                # (2) 补非井点（trace-block）
+                # Implementation note for the surrounding code.
                 # =====================================================
                 while len(chosen) < cur_bs:
                     need = cur_bs - len(chosen)
@@ -2774,10 +2773,10 @@ class WellBalancedBatchSampler(Sampler):
 
                 yield batch.tolist()
 
-            return  # ✅ trace-block 分支结束
+            return  # Implementation note for the surrounding code.
 
         # =========================================================
-        # 点级采样分支（原逻辑） + 可选 patch / line-block 注入
+        # Implementation note for the surrounding code.
         # =========================================================
         well_pool = self.well_idx.copy()
         non_pool  = self.non_idx.copy()
@@ -2817,7 +2816,7 @@ class WellBalancedBatchSampler(Sampler):
                         if len(chosen) >= cur_bs * 3:
                             break
 
-            # ✅ (0) patch 注入
+            # Implementation note for the surrounding code.
             patch_used = 0
             if self._use_patch and self.grid_index_table is not None and self.samples_full is not None:
                 patch_size_nom = max(1, self.patch_line_block * self.patch_tau_block)
@@ -2846,7 +2845,7 @@ class WellBalancedBatchSampler(Sampler):
 
                 patch_used = len(chosen) - before0
 
-            # ✅ (0.5) line-block 注入
+            # Implementation note for the surrounding code.
             line_used = 0
             if self._use_line_block and len(self.line_keys) > 0 and len(chosen) < cur_bs:
                 n_line = int(round(cur_bs * self.line_quota))
@@ -2869,7 +2868,7 @@ class WellBalancedBatchSampler(Sampler):
                             _add_idxs(pick)
                         line_used = len(chosen) - before1
 
-            # 再补 wells
+            # Implementation note for the surrounding code.
             if kw > 0:
                 guard = 0
                 while int(self.wflags_full[np.asarray(chosen, dtype=np.int64)].sum()) < kw and guard < 10000 and len(chosen) < cur_bs:
@@ -2880,7 +2879,7 @@ class WellBalancedBatchSampler(Sampler):
                     _add_idxs([well_pool[wi]])
                     wi += 1
 
-            # 再补 non
+            # Implementation note for the surrounding code.
             while len(chosen) < cur_bs:
                 need = cur_bs - len(chosen)
                 if nN == 0:
@@ -2922,16 +2921,16 @@ class WellBalancedBatchSampler(Sampler):
 
 def _collate(batch):
     """
-    支持两种 Dataset 返回：
+English implementation note for the surrounding code.
       1) (X, y, y_bl, meta)
-      2) (X, y, meta)   -> 自动补 y_bl=None
+English implementation note for the surrounding code.
     """
     import torch
 
     if len(batch) == 0:
         raise RuntimeError("_collate got empty batch")
 
-    # 情况1：四元组
+    # Implementation note for the surrounding code.
     if len(batch[0]) == 4:
         Xs, ys, y_bls, metas = zip(*batch)
         X = torch.stack(Xs, 0)
@@ -2944,7 +2943,7 @@ def _collate(batch):
 
 
 
-    # 情况2：三元组
+    # Implementation note for the surrounding code.
     elif len(batch[0]) == 3:
         Xs, ys, metas = zip(*batch)
         X = torch.stack(Xs, 0)
@@ -2958,8 +2957,8 @@ def _collate(batch):
 
 def _flat_to_cholesky(tril_flat: torch.Tensor, D: int, jitter: float = 1e-6):
     """
-    将 (B, D*(D+1)/2) 的下三角扁平参数还原为 L (B, D, D)，
-    其中对角线通过 softplus 确保正数，并加上 jitter 稳定。
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     B = tril_flat.shape[0]
     L = tril_flat.new_zeros((B, D, D))
@@ -2968,7 +2967,7 @@ def _flat_to_cholesky(tril_flat: torch.Tensor, D: int, jitter: float = 1e-6):
         for j in range(i+1):
             L[:, i, j] = tril_flat[:, idx]
             idx += 1
-    # 对角线正定化：softplus + jitter
+    # Implementation note for the surrounding code.
     diag = torch.nn.functional.softplus(torch.diagonal(L, dim1=1, dim2=2)) + jitter
     for i in range(D):
         L[:, i, i] = diag[:, i]
@@ -2977,17 +2976,17 @@ def _flat_to_cholesky(tril_flat: torch.Tensor, D: int, jitter: float = 1e-6):
 
 def gaussian_nll_fullcov(mu: torch.Tensor, L: torch.Tensor, target: torch.Tensor):
     """
-    多元高斯 NLL（均值 mu，协方差 Σ=L L^T）。
+English implementation note for the surrounding code.
     mu / target: (B, D)
-    L: (B, D, D) 下三角（对角为正）
-    返回标量 loss（batch 平均）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     B, D = mu.shape
     diff = (target - mu).unsqueeze(-1)        # (B,D,1)
 
-    # 解 L z = diff  ->  z = L^{-1} diff
-    # 等价 mahal = ||z||^2
-    # 使用 triangular_solve 更稳
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     z, _ = torch.triangular_solve(diff, L, upper=False)  # (B,D,1)
     mahal = (z.squeeze(-1) ** 2).sum(dim=1)              # (B,)
 
@@ -2997,12 +2996,12 @@ def gaussian_nll_fullcov(mu: torch.Tensor, L: torch.Tensor, target: torch.Tensor
     nll = 0.5 * (mahal + logdet + D * math.log(2 * math.pi))                # (B,)
     return nll.mean()
 
-# ===== 放到文件顶部某处（比如 train_epoch 前） =====
+# Implementation note for the surrounding code.
 def _unpack_forward(out, device):
     """
-    更稳健版：
-      - 优先用 shape 判断 logvar（是否能 broadcast 到 pred）
-      - KL 允许是标量或单元素张量
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import torch
 
@@ -3015,7 +3014,7 @@ def _unpack_forward(out, device):
         if not (torch.is_tensor(lv) and torch.is_tensor(mu)):
             return False
         try:
-            _ = mu + lv  # 利用 PyTorch 广播规则试一下
+            _ = mu + lv  # Implementation note for the surrounding code.
             return True
         except Exception:
             return False
@@ -3038,17 +3037,17 @@ def _unpack_forward(out, device):
             a, b, c = out
             pred = a
 
-            # 优先判断 b 是否像 logvar
+            # Implementation note for the surrounding code.
             if _can_broadcast(b, pred):
                 logvar = b
-                # c 若像标量，则当 KL；否则忽略（比如 d_rec）
+                # Implementation note for the surrounding code.
                 if _is_scalar_tensor(c):
                     kl = c
             else:
-                # b 不像 logvar，那更可能是 KL
+                # Implementation note for the surrounding code.
                 if _is_scalar_tensor(b):
                     kl = b
-                # c 若像 logvar，则取 c
+                # Implementation note for the surrounding code.
                 if _can_broadcast(c, pred):
                     logvar = c
 
@@ -3056,24 +3055,24 @@ def _unpack_forward(out, device):
             a, b = out
             pred = a
 
-            # b 能 broadcast 到 pred -> 当 logvar；否则当 KL
+            # Implementation note for the surrounding code.
             if _can_broadcast(b, pred):
                 logvar = b
             else:
                 if _is_scalar_tensor(b):
                     kl = b
                 else:
-                    # 兜底：既不是可广播logvar，也不是标量KL，那就当 logvar（或报错都行）
+                    # Implementation note for the surrounding code.
                     logvar = b
 
         elif L == 1:
             pred = out[0]
         else:
-            raise ValueError(f"forward() 返回了长度为 {L} 的 tuple，无法解析")
+            raise ValueError(f"forward() returned a tuple of length {L}, which cannot be parsed")
     else:
         pred = out
 
-    # ---- KL 兜底到 tensor scalar ----
+    # Implementation note for the surrounding code.
     if kl is None:
         kl = torch.tensor(0.0, dtype=torch.float32, device=device)
     elif not torch.is_tensor(kl):
@@ -3087,7 +3086,7 @@ def _unpack_forward(out, device):
 
 def _resolve_student_df(model=None, default: float = 4.0) -> float:
     """
-    统一解析 Student-t 自由度：
+English implementation note for the surrounding code.
       1) model.student_df
       2) ARGS_HOOK.student_df / ARGS_HOOK["student_df"]
       3) fallback default
@@ -3120,15 +3119,15 @@ def _student_t_nll_diag(pred: torch.Tensor,
                         nu: float = 3.0,
                         model=None) -> torch.Tensor:
     """
-    对角 Student-t 负对数似然（逐样本逐通道求和再取均值）
+English implementation note for the surrounding code.
 
-    支持:
+    supports:
       pred/target: (..., D)
-      logvar:      (..., D) 或 None
+English implementation note for the surrounding code.
 
-    公式（单维）:
+English implementation note for the surrounding code.
        nll = 0.5*log(nu*pi) + log(s) + 0.5*(nu+1)*log(1 + ((y-mu)^2)/(nu*s^2))
-       其中 s = exp(0.5*logvar)
+English implementation note for the surrounding code.
     """
     if pred.shape != target.shape:
         raise ValueError(f"_student_t_nll_diag: pred.shape={pred.shape} != target.shape={target.shape}")
@@ -3152,7 +3151,7 @@ def _student_t_nll_diag(pred: torch.Tensor,
     c0 = 0.5 * torch.log(nu_t * torch.tensor(math.pi, device=pred.device, dtype=pred.dtype))
     t = c0 + log_s + 0.5 * (nu_t + 1.0) * torch.log1p(diff2 / (nu_t * s2 + eps))
 
-    # 对最后一维 D 求和，其他维度取平均
+    # Implementation note for the surrounding code.
     return t.sum(dim=-1).mean()
 
 
@@ -3168,7 +3167,7 @@ def student_t_nll_from_logvar(mu: torch.Tensor,
     """
     Heteroscedastic Student-t NLL.
 
-    支持:
+    supports:
       mu,y,logvar: (..., C)
 
     Returns:
@@ -3202,7 +3201,7 @@ def student_t_nll_from_logvar(mu: torch.Tensor,
 
 def _recon_loss(pred, target, aux=None, loss_type: str = "gauss", model=None):
     """
-    通用重构项：
+English implementation note for the surrounding code.
 
       - loss_type == "gauss":
           * aux is None            -> MSE
@@ -3210,12 +3209,12 @@ def _recon_loss(pred, target, aux=None, loss_type: str = "gauss", model=None):
           * aux.shape[-1] == D*(D+1)//2 -> full-cov Gaussian NLL
 
       - loss_type == "student":
-          * aux is None            -> diag Student-t（单位方差）
+English implementation note for the surrounding code.
           * aux.shape[-1] == D     -> diag Student-t
-          * aux.shape[-1] == D*(D+1)//2 -> 回退为 Gaussian full-cov
+English implementation note for the surrounding code.
 
-    支持:
-      pred/target: (B, D) 或 (B, T, D)
+    supports:
+English implementation note for the surrounding code.
     """
     if pred.shape != target.shape:
         raise ValueError(f"_recon_loss: pred.shape={pred.shape} != target.shape={target.shape}")
@@ -3237,7 +3236,7 @@ def _recon_loss(pred, target, aux=None, loss_type: str = "gauss", model=None):
             return torch.mean(torch.exp(-logvar) * (pred - target) ** 2 + logvar)
 
         elif aux.shape[-1] == D * (D + 1) // 2:
-            # 这里假设你工程里已有 _flat_to_cholesky / gaussian_nll_fullcov
+            # Implementation note for the surrounding code.
             L = _flat_to_cholesky(aux, D)
             return gaussian_nll_fullcov(pred, L, target)
 
@@ -3263,7 +3262,7 @@ def _recon_loss(pred, target, aux=None, loss_type: str = "gauss", model=None):
             return _student_t_nll_diag(pred, target, logvar, nu=nu_use, model=model)
 
         elif aux.shape[-1] == D * (D + 1) // 2:
-            # Full Student-t 推导复杂，这里仍回退到 Gaussian full-cov
+            # Implementation note for the surrounding code.
             L = _flat_to_cholesky(aux, D)
             return gaussian_nll_fullcov(pred, L, target)
 
@@ -3276,8 +3275,8 @@ def _recon_loss(pred, target, aux=None, loss_type: str = "gauss", model=None):
 
 def _spectral_loss_from_flat(x_flat, y_flat, n_angles, win, device):
     """
-    x_flat,y_flat: (B, A*W) 的窗口输入
-    对还原后的 (B, A, W) 沿 W 维做 rFFT 幅值对齐
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     if x_flat.shape != y_flat.shape:
         raise ValueError(f"_spectral_loss_from_flat: x_flat.shape={x_flat.shape} != y_flat.shape={y_flat.shape}")
@@ -3308,9 +3307,9 @@ def _spectral_loss_from_flat(x_flat, y_flat, n_angles, win, device):
 
 def _apply_temp_to_logvar(logvar: torch.Tensor | None, temp_scale) -> torch.Tensor | None:
     """
-    把温度缩放应用到 logvar（σ -> τ·σ 等价于 logvar += 2logτ）
-    支持形状:
-      (B, C), (B, T, C), ... 只要最后一维是通道维
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     if (logvar is None) or (temp_scale is None):
         return logvar
@@ -3322,7 +3321,7 @@ def _apply_temp_to_logvar(logvar: torch.Tensor | None, temp_scale) -> torch.Tens
 
 def _lowfreq_seq(seq: torch.Tensor, fs_hz: float, fcut: float):
     """
-    低通滤波（0 ~ fcut Hz），用于低频先验
+English implementation note for the surrounding code.
     seq: (M, T, C)
     """
     if seq is None:
@@ -3386,7 +3385,7 @@ class EMALossBalancer:
 
     def __call__(self, raw_terms: dict, step: int):
         """
-        raw_terms: dict(name -> scalar tensor), 已包含语义权重(lambda_xxx)后的项
+English implementation note for the surrounding code.
         step: global step
         returns:
           total_scaled_loss, scales(dict)
@@ -3394,10 +3393,10 @@ class EMALossBalancer:
         device = self.ema[self.names[0]].device
 
         # =========================
-        # 1) 构造“用于更新 EMA 的安全项”
-        #    - 只用 finite
-        #    - 只用 > tiny 的项（避免 0 把 EMA 拉成 0 -> scale 飙到 clamp_max）
-        #    - 对极端离群做截断（winsorize）
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         # =========================
         safe_terms = {}
         tiny = 1e-8
@@ -3408,19 +3407,19 @@ class EMALossBalancer:
             else:
                 v = v.to(device)
 
-            # 不更新非有限
+            # Implementation note for the surrounding code.
             if not torch.isfinite(v).all():
                 continue
 
-            # 用绝对值判断是否“有效”
+            # Implementation note for the surrounding code.
             v_abs = v.detach().abs()
 
-            # 太小就不更新 EMA（但仍可参与 total loss）
+            # Implementation note for the surrounding code.
             if v_abs.item() < tiny:
                 continue
 
-            # spike 抑制：如果已经有 EMA 基线，限制 v_abs 不要远超 EMA（避免尖峰把 EMA 拉爆）
-            # 允许最大 50 倍（可调：20~100）
+            # Implementation note for the surrounding code.
+            # Implementation note for the surrounding code.
             if (n in self.ema) and self.inited.get(n, False):
                 base = (self.ema[n].detach().abs() + self.eps)
                 cap = 50.0 * base
@@ -3430,11 +3429,11 @@ class EMALossBalancer:
 
             safe_terms[n] = v_use
 
-        if len(safe_terms) > 0 and step >= 0:  # 或 step >= self.warmup_steps//2
+        if len(safe_terms) > 0 and step >= 0:  # Implementation note for the surrounding code.
             self.update_ema(safe_terms)
         # =========================
-        # 2) 计算 scales + total
-        #    注意：scale 用 EMA；但 loss 总是用 raw_terms（不丢项）
+        # 2) compute scales + total
+        # Implementation note for the surrounding code.
         # =========================
         scales = {}
         total = None
@@ -3446,7 +3445,7 @@ class EMALossBalancer:
                 v = v.to(device)
 
             if (n in self.ema) and self.inited.get(n, False) and (step >= self.warmup_steps):
-                # 若 EMA 非常小（接近 0），直接用 1，避免 scale 直接撞 clamp_max
+                # Implementation note for the surrounding code.
                 denom = (self.ema[n] + self.eps)
                 if denom.item() < 1e-6:
                     s = torch.tensor(1.0, device=device)
@@ -3468,7 +3467,7 @@ class EMALossBalancer:
 
 class PhysEMANormalizer:
     """
-    用 EMA 估计 misfit/prior 的典型尺度，并将其归一化到 O(1)
+English implementation note for the surrounding code.
     """
     def __init__(self, decay=0.99, eps=1e-8, clamp_scale=(1e-3, 1e3), device="cpu"):
         self.decay = float(decay)
@@ -3493,7 +3492,7 @@ class PhysEMANormalizer:
             self._ema_misfit.mul_(self.decay).add_(m * (1 - self.decay))
             self._ema_prior.mul_(self.decay).add_(p * (1 - self.decay))
 
-        # clamp 防止极端 batch 让尺度崩掉
+        # Implementation note for the surrounding code.
         self._ema_misfit.clamp_(self.clamp_min, self.clamp_max)
         self._ema_prior.clamp_(self.clamp_min, self.clamp_max)
 
@@ -3501,7 +3500,7 @@ class PhysEMANormalizer:
         if not self.inited:
             return misfit, prior, None, None
 
-        # ✅ scale 作为常数，不需要梯度
+        # Implementation note for the surrounding code.
         s_m = self._ema_misfit.detach().to(device=misfit.device, dtype=misfit.dtype)
         s_p = self._ema_prior.detach().to(device=prior.device, dtype=prior.dtype)
 
@@ -3516,17 +3515,17 @@ def lateral_second_order_loss_line(
     beta: float = 0.5,
     use_smoothl1: bool = True,
     chan_weight: torch.Tensor | None = None,   # shape (1,C)
-    max_gap: int = 8,                          # 允许的 line 索引间隔
+    max_gap: int = 8,                          # Implementation note for the surrounding code.
 ):
     """
-    二阶横向连续性：对固定 (t, tau) 的 line 方向 l 做二阶差分约束
+English implementation note for the surrounding code.
       d2 = p(l_{i-1}) - 2*p(l_i) + p(l_{i+1})
 
     pred : (B,C)
     metas: list of (l,t,tau,is_well)
-    返回:
-      loss: 标量 tensor (可导)
-      triples: 使用到的三元组数量（用于日志）
+    return:
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     device = pred.device
     B, C = pred.shape
@@ -3550,13 +3549,13 @@ def lateral_second_order_loss_line(
             continue
         lst.sort(key=lambda x: x[0])  # sort by l
 
-        # 用相邻三点构三元组 (i-1, i, i+1)
+        # Implementation note for the surrounding code.
         for k in range(1, len(lst) - 1):
             l0, i0 = lst[k - 1]
             l1, i1 = lst[k]
             l2, i2 = lst[k + 1]
 
-            # gap 约束：左右相邻都不能太远
+            # Implementation note for the surrounding code.
             if (l1 - l0) > max_gap or (l2 - l1) > max_gap:
                 continue
 
@@ -3572,17 +3571,17 @@ def lateral_second_order_loss_line(
 
     d2_all = torch.stack(d2_list, dim=0)  # (T,C)
 
-    # 通道权重
+    # Implementation note for the surrounding code.
     if chan_weight is not None:
         d2_all = d2_all * chan_weight  # broadcast to (T,C)
 
     if use_smoothl1:
-        # 让 d2 -> 0
+        # Implementation note for the surrounding code.
         loss = F.smooth_l1_loss(d2_all, torch.zeros_like(d2_all), reduction="sum", beta=beta)
     else:
         loss = (d2_all ** 2).sum()
 
-    # ✅ 关键：按 triples 和通道数归一，稳定量级（也更利于调 lambda）
+    # Implementation note for the surrounding code.
     loss = loss / (triples + 1e-6)
     loss = loss / (C + 1e-6)
 
@@ -3599,11 +3598,11 @@ def lateral_tv_loss_line_torch(
     chan_weight: torch.Tensor | None = None,
 ):
     """
-    纯 torch 横向连续性（line 方向）：
-    - 在 batch 内，根据 metas 把点按 (t, tau) 分组
-    - 每组内按 l 排序，连接相邻点（gap<=max_gap）形成 pair
-    - loss = SmoothL1( pred[j]-pred[i] , 0 )  -> 鼓励横向平滑/连续
-    返回：lat_raw(torch.Tensor, requires_grad=True), lat_pairs(int)
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+    return: lat_raw(torch.Tensor, requires_grad=True), lat_pairs(int)
     """
     device = pred.device
     B, C = pred.shape
@@ -3612,7 +3611,7 @@ def lateral_tv_loss_line_torch(
     else:
         chan_weight = chan_weight.to(device=device, dtype=pred.dtype).view(1, C)
 
-    # -------- 1) 用 python 建 pair（索引选择不可导没关系，只要 pred 的算子可导）--------
+    # Implementation note for the surrounding code.
     groups = {}  # key=(t,tau) -> list[(l, idx)]
     for i, m in enumerate(metas):
         if not (isinstance(m, (list, tuple)) and len(m) >= 3):
@@ -3640,7 +3639,7 @@ def lateral_tv_loss_line_torch(
     idx_i = torch.as_tensor(pairs_i, device=device, dtype=torch.long)
     idx_j = torch.as_tensor(pairs_j, device=device, dtype=torch.long)
 
-    # -------- 2) 关键：loss 必须直接从 pred 的张量运算得到（保证梯度）--------
+    # Implementation note for the surrounding code.
     dp = pred.index_select(0, idx_j) - pred.index_select(0, idx_i)  # (P,C)
     dp = dp * chan_weight  # channel weight
 
@@ -3651,8 +3650,8 @@ def lateral_tv_loss_line_torch(
 
 class PositiveShift:
     """
-    把任意标量 loss 平移到正数：x_pos = x_raw + shift
-    shift 基于历史最小值，保证 x_pos >= floor
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     def __init__(self, floor: float = 1e-3, freeze_after: int = 2000):
         self.floor = float(floor)
@@ -3675,8 +3674,8 @@ class PositiveShift:
 
 class LossShiftEMA:
     """
-    只用于把可能为负的 loss（尤其 NLL）平移到正数区间，供显示/ratio/EMA-balancer 使用。
-    不影响训练梯度：内部全部 detach + clamp。
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     def __init__(self, decay=0.99, eps=1e-6, device="cpu"):
         self.decay = float(decay)
@@ -3684,7 +3683,7 @@ class LossShiftEMA:
         self.device = torch.device(device)
         self.inited = False
         self.ema_neg_attr = None
-        self.ema_neg_well = None  # 可选：well_term 也可能负
+        self.ema_neg_well = None  # Implementation note for the surrounding code.
 
     @torch.no_grad()
     def _ema_update(self, ema, x):
@@ -3703,7 +3702,7 @@ class LossShiftEMA:
 
         if attr_loss is not None:
             a = attr_loss.detach().float().to(self.device)
-            neg = F.relu(-a)  # 只跟踪“负的幅度”
+            neg = F.relu(-a)  # Implementation note for the surrounding code.
             self.ema_neg_attr = self._ema_update(self.ema_neg_attr, neg)
 
         if well_term is not None:
@@ -3714,7 +3713,7 @@ class LossShiftEMA:
     @torch.no_grad()
     def shift_attr(self, attr_loss: torch.Tensor):
         if (not self.inited) or (self.ema_neg_attr is None):
-            # 没初始化就至少 clamp 到正数，避免画图炸
+            # Implementation note for the surrounding code.
             return torch.clamp(attr_loss.detach(), min=self.eps)
         s = self.ema_neg_attr.to(device=attr_loss.device, dtype=attr_loss.dtype)
         return torch.clamp(attr_loss.detach() + s + self.eps, min=self.eps)
@@ -3731,25 +3730,25 @@ class LossShiftEMA:
 @torch.no_grad()
 def predict_section_t_fused(
     model,
-    ds,                 # VolumeWindowDataset 实例（已经有 ds.X_mean/X_std, ds.Y_mean/Y_std）
+    ds,                 # Implementation note for the surrounding code.
     device,
-    t_idx: int,         # 固定 trace index
-    l_ids=None,         # 要预测哪些 line（默认全 L）
-    tau_min=None,       # tau 范围（默认 [h, N-h-1]）
+    t_idx: int,         # Implementation note for the surrounding code.
+    l_ids=None,         # Implementation note for the surrounding code.
+    tau_min=None,       # Implementation note for the surrounding code.
     tau_max=None,
     batch_size: int = 256,
-    fuse_radius_tau: int = 2,        # 时间融合半径（2 -> 5点核）
-    fuse_sigma_tau: float = 1.0,     # 高斯 sigma
+    fuse_radius_tau: int = 2,        # Implementation note for the surrounding code.
+    fuse_sigma_tau: float = 1.0,     # Implementation note for the surrounding code.
     fuse_kind: str = "gaussian",     # "gaussian" / "box" / "median"
-    fuse_radius_line: int = 0,       # 可选：沿 line 再融合（建议 0~1）
+    fuse_radius_line: int = 0,       # Implementation note for the surrounding code.
     fuse_sigma_line: float = 1.0,
 ):
     """
-    输出：
-      pred_raw  : [L_sel, T_len, 3]  未融合（逐 tau 独立预测）
-      pred_fuse : [L_sel, T_len, 3]  融合后（更连续）
-      tau_ids   : [T_len]            对应的 tau index
-      l_ids     : [L_sel]            对应的 line index
+    output: 
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     model.eval()
     L, T, A, N = ds.stack.shape
@@ -3766,22 +3765,22 @@ def predict_section_t_fused(
         tau_max = N - h - 1
     tau_ids = np.arange(tau_min, tau_max + 1, dtype=np.int32)
 
-    # --------- 先逐点预测（stride=1）---------
-    # 结果存 [L_sel, T_len, 3]
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     pred_raw = np.zeros((len(l_ids), len(tau_ids), 3), dtype=np.float32)
 
-    # 预取归一化参数
+    # Implementation note for the surrounding code.
     X_mean = ds.X_mean.astype(np.float32)  # [A]
     X_std  = ds.X_std.astype(np.float32)   # [A]
     X_std  = np.maximum(X_std, 1e-6)
 
-    # 批处理组织：把所有 (li, tau) flatten 成一个列表
+    # Implementation note for the surrounding code.
     pairs = [(i_li, int(li), int(t_idx), int(tau))
              for i_li, li in enumerate(l_ids)
              for tau in tau_ids]
 
     def _batch_to_tensor(batch_pairs):
-        # 返回 X: [B, A, line_ctx, win]
+        # return X: [B, A, line_ctx, win]
         Xs = []
         for (_, li, ti, tau) in batch_pairs:
             X = ds._get_x_patch_25d(li, ti, tau)  # [A, line_ctx, win] float32
@@ -3795,22 +3794,22 @@ def predict_section_t_fused(
         Xb = _batch_to_tensor(batch_pairs).to(device, non_blocking=(device.type=="cuda"))
 
         out = model(Xb, return_kl=False) if "return_kl" in model.forward.__code__.co_varnames else model(Xb)
-        # out 可能是 (mu, logvar, kl) 或 mu
+        # Implementation note for the surrounding code.
         if isinstance(out, (tuple, list)):
             mu = out[0]
         else:
             mu = out
 
         mu = mu.detach()
-        # 反归一化到物理域
+        # Implementation note for the surrounding code.
         mu_phys = ds.denormalize_y(mu).detach().cpu().numpy()  # [B,3]
 
-        # 写回 pred_raw
+        # Implementation note for the surrounding code.
         for k, (i_li, li, ti, tau) in enumerate(batch_pairs):
             j_tau = int(tau - tau_min)
             pred_raw[i_li, j_tau, :] = mu_phys[k]
 
-    # --------- 融合（沿 tau）---------
+    # Implementation note for the surrounding code.
     pred_fuse = pred_raw.copy()
 
     if fuse_radius_tau > 0:
@@ -3827,12 +3826,12 @@ def predict_section_t_fused(
         else:
             raise ValueError(f"Unknown fuse_kind={fuse_kind}")
 
-        # 用 torch 做 1D conv（更快 & pad 更方便）
+        # Implementation note for the surrounding code.
         x = torch.from_numpy(pred_raw).permute(0, 2, 1).contiguous()  # [L_sel, 3, T_len]
         x = x.float()
 
         if fuse_kind == "median":
-            # 中值滤波（简单实现：滑窗堆叠再取 median）
+            # Implementation note for the surrounding code.
             pad = fuse_radius_tau
             x_pad = F.pad(x, (pad, pad), mode="reflect")  # [L,3,T+2pad]
             chunks = [x_pad[:, :, i:i+len(tau_ids)] for i in range(0, 2*pad+1)]
@@ -3848,7 +3847,7 @@ def predict_section_t_fused(
 
         pred_fuse = y.permute(0, 2, 1).cpu().numpy()  # [L_sel,T,3]
 
-    # --------- 可选：沿 line 再轻微融合（一般 0~1 就够）---------
+    # Implementation note for the surrounding code.
     if fuse_radius_line > 0:
         K = 2 * fuse_radius_line + 1
         xs = np.arange(-fuse_radius_line, fuse_radius_line + 1, dtype=np.float32)
@@ -3871,18 +3870,18 @@ def build_scale_tril_3x3(chol_params: torch.Tensor,
                          offdiag_scale: float = 0.35) -> torch.Tensor:
     """
     chol_params: (B, win, 6)
-    返回:
+    return:
       L: (B, win, 3, 3), lower-triangular, diagonal > 0
 
-    参数顺序约定:
+English implementation note for the surrounding code.
       [a, b, c, d, e, f] ->
       [[l11,   0,   0],
        [l21, l22,   0],
        [l31, l32, l33]]
 
-    稳定化策略：
-      - 对角: softplus + clamp
-      - 非对角: tanh 压缩，再按 sqrt(diag_i * diag_j) 缩放
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import torch
     import torch.nn.functional as F
@@ -3987,18 +3986,18 @@ def sample_multivariate_student_t(mu: torch.Tensor,
                                   max_scale: float = 3.0,
                                   max_mahalanobis_scale: float = 6.0) -> torch.Tensor:
     """
-    稳健版 multivariate Student-t 采样
+English implementation note for the surrounding code.
 
-    参数:
+    parameters:
       mu:         (..., 3)
       scale_tril: (..., 3, 3)
       nu:         scalar df
-      n_samples:  采样数
-      max_scale:  对 sqrt(nu/u) 的上限裁剪，抑制极端重尾
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
       max_mahalanobis_scale:
-                  对最终 whitened sample 幅度再做一次软裁剪
+English implementation note for the surrounding code.
 
-    返回:
+    return:
       samples: (n_samples, ..., 3)
     """
     import torch
@@ -4034,14 +4033,14 @@ def sample_multivariate_student_t(mu: torch.Tensor,
 
     scale = torch.sqrt(nu / (u + 1e-12)).unsqueeze(-1)   # (n_samples, ..., 1)
 
-    # ✅ 稳健：裁掉极端尾部
+    # Implementation note for the surrounding code.
     if max_scale is not None and max_scale > 0:
         scale = torch.clamp(scale, max=float(max_scale))
 
     # first pass
     delta = Lz * scale
 
-    # ✅ 再做一次软裁剪：限制最终扰动过大
+    # Implementation note for the surrounding code.
     if max_mahalanobis_scale is not None and max_mahalanobis_scale > 0:
         delta = max_mahalanobis_scale * torch.tanh(delta / max_mahalanobis_scale)
 
@@ -4088,7 +4087,7 @@ def train_epoch_vaim(
     """
     Sequence + multivariate Student-t version
     ----------------------------------------
-    约定：
+English implementation note for the surrounding code.
       pred / y / y_bl : (B, win, 3)
       d_rec           : (B, win, A)
       chol_params     : (B, win, 6)
@@ -4307,7 +4306,7 @@ def train_epoch_vaim(
 
         C = int(pred.shape[-1])
 
-        # ---- RHOB 退化检测（物理域 y std）----
+        # Implementation note for the surrounding code.
         if (not rhob_bad) and ((it < 3) or ((it % int(rhob_check_every) == 0) and (it > 0))):
             try:
                 y_phys = denorm_t(y)  # (B,win,3)
@@ -4382,7 +4381,7 @@ def train_epoch_vaim(
 
         # ---------------------------
         # ✅ gate entropy regularization
-        #   防止 mixture 迅速塌成单分量
+        # Implementation note for the surrounding code.
         # ---------------------------
         gate_reg = pred.new_tensor(0.0)
         if isinstance(extra, dict) and ("gate" in extra):
@@ -4390,7 +4389,7 @@ def train_epoch_vaim(
             if torch.is_tensor(gate):
                 gate_safe = gate.clamp_min(1e-8)
                 gate_entropy = -(gate_safe * torch.log(gate_safe)).sum(dim=-1).mean()
-                gate_reg = -1e-3 * gate_entropy   # 轻微鼓励混合
+                gate_reg = -1e-3 * gate_entropy   # Implementation note for the surrounding code.
                 gate_reg = torch.nan_to_num(gate_reg, nan=0.0, posinf=0.0, neginf=0.0)
 
 
@@ -4407,7 +4406,7 @@ def train_epoch_vaim(
         kl_term_w = float(beta_now) * kl_term
 
         # ==========================================================
-        # well term（sequence版）
+        # Implementation note for the surrounding code.
         # ==========================================================
         well_mask_list = [m[3] if (isinstance(m, (list, tuple)) and len(m) >= 4) else False for m in metas]
         mask = torch.tensor(well_mask_list, dtype=torch.bool, device=pred.device)
@@ -4453,7 +4452,7 @@ def train_epoch_vaim(
             well_term = float(lambda_well) * loss_well
 
         # ---------------------------
-        # physics（sequence版，继续吃 pred_m/y_m）
+        # Implementation note for the surrounding code.
         # ---------------------------
         loss_physics = pred.new_tensor(0.0)
         if physics_loss_fn is not None:
@@ -4553,7 +4552,7 @@ def train_epoch_vaim(
             loss_physics = torch.nan_to_num(loss_physics, nan=0.0, posinf=0.0, neginf=0.0)
 
         # ---------------------------
-        # LAT（sequence版）
+        # Implementation note for the surrounding code.
         # ---------------------------
         lat_raw = pred.new_tensor(0.0)
         lat_term = pred.new_tensor(0.0)
@@ -4652,7 +4651,7 @@ def train_epoch_vaim(
         if optimizer_phys is not None:
             optimizer_phys.step()
 
-        # stats（按样本数加权）
+        # Implementation note for the surrounding code.
         total_samples += B
         total_loss += float(loss_raw.item()) * B
         total_attr += float(attr_loss.item()) * B
@@ -4690,8 +4689,8 @@ def train_epoch_vaim(
         })
 
     tau_now = None
-    # multivariate Student-t 版不再用 temp_scale/logvar
-    # 这里保留返回字段兼容旧日志
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     try:
         tau_now = None
     except Exception:
@@ -4747,7 +4746,7 @@ def eval_epoch_vaim(
     physics_loss_fn=None,
     denormalize_fn=None,
     beta_kl: float = 0.0,
-    temp_scale=None,   # 保留接口兼容，但联合t版不再使用
+    temp_scale=None,   # Implementation note for the surrounding code.
     lambda_recon: float = 0.02,
     phys_norm=None,
     y_mean_t=None, y_std_t=None,
@@ -5541,8 +5540,8 @@ def plot_training_curves(train_history, val_history, out_dir, beta_kl=1.0):
 def _build_windows_25d(ds, l: int, t: int, tau_list, line_ctx: int = None):
     """
     return:
-      Xb: torch.FloatTensor [T_eff, A_sel, line_ctx, win] (标准化后)
-      tau_axis: np.int64 [T_eff]  (就是 tau_list)
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
       ang_idx: np.int64 [A_sel]
       ls_idx:  np.int64 [line_ctx]
     """
@@ -5559,7 +5558,7 @@ def _build_windows_25d(ds, l: int, t: int, tau_list, line_ctx: int = None):
     line_ctx = max(1, line_ctx)
     r = line_ctx // 2
 
-    # 预先构造 ls（对所有 tau 一样）
+    # Implementation note for the surrounding code.
     l0 = max(0, l - r)
     l1 = min(L - 1, l + r)
     ls = list(range(l0, l1 + 1))
@@ -5587,7 +5586,7 @@ def _build_windows_25d(ds, l: int, t: int, tau_list, line_ctx: int = None):
         ang_idx = np.asarray(ang, dtype=np.int64).reshape(-1)
     A_sel = int(ang_idx.size)
 
-    # -------- 标准化参数对齐角度子集 ----------
+    # Implementation note for the surrounding code.
     X_mean_sel = np.asarray(ds.X_mean, dtype=np.float32).reshape(-1)[ang_idx]  # (A_sel,)
     X_std_sel  = np.asarray(ds.X_std,  dtype=np.float32).reshape(-1)[ang_idx]  # (A_sel,)
     Xm = X_mean_sel.reshape(A_sel, 1, 1)  # (A_sel,1,1)
@@ -5598,7 +5597,7 @@ def _build_windows_25d(ds, l: int, t: int, tau_list, line_ctx: int = None):
         s0 = int(tau - h)
         s1 = int(tau + h + 1)
 
-        # ✅ FIX: 先只用 ls_idx 这个 advanced index，angles 暂时用 ':'
+        # Implementation note for the surrounding code.
         tmp = ds.stack[ls_idx, t, :, s0:s1]         # (line_ctx, A_all, win)
         tmp = tmp[:, ang_idx, :]                    # (line_ctx, A_sel, win)
 
@@ -5626,8 +5625,8 @@ def r2_1d(y_true, y_pred, eps=1e-12):
 
 def plot_parity_and_residuals(y_true, y_pred, out_dir, tag="val", max_points=200_000):
     """
-    修复版：自动过滤 NaN/Inf，必要时随机抽样避免卡死；每通道画散点+y=x+拟合线、
-    并输出残差直方图和Q-Q。
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import os, numpy as np, matplotlib.pyplot as plt
     from scipy import stats as _stats
@@ -5638,7 +5637,7 @@ def plot_parity_and_residuals(y_true, y_pred, out_dir, tag="val", max_points=200
     yt, yp = y_true[mask], y_pred[mask]
     if yt.shape[0] == 0:
         print("[WARN] parity: no finite samples after filtering"); return
-    # 抽样
+    # Implementation note for the surrounding code.
     if yt.shape[0] > max_points:
         idx = np.random.default_rng(123).choice(yt.shape[0], size=max_points, replace=False)
         yt, yp = yt[idx], yp[idx]
@@ -5681,25 +5680,25 @@ def mc_predict_loader(model, loader, device, T: int = 20, temp_scale=None,
                       return_scale: bool = False,
                       dropout_only: bool = True):
     """
-    MC 预测（中心点兼容版，适配联合 Student-t + sequence 输出）
+English implementation note for the surrounding code.
 
-    返回：
-      mean_n:     (N,3) 标准化空间均值（取 win 中心点）
-      std_pred_n: (N,3) 标准化空间预测总 std（epi + aleatoric）
-    若 return_scale=True，额外返回：
-      scale_n:    (N,3) 标准化空间条件后验 std（取联合协方差对角线开方）
+    return: 
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
 
-    当前模型输出约定：
+English implementation note for the surrounding code.
       mu:          (B, win, 3)
       chol_params: (B, win, 6)
       d_rec:       (B, win, A)
       kl:          scalar / tensor
 
-    说明：
-      - 这里只取中心时间位置 t0 = win//2
-      - 联合 Student-t 的 aleatoric 方差：
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
             Var_t = Sigma * df/(df-2)
-        这里对每个通道取协方差对角线
+English implementation note for the surrounding code.
     """
     import torch
     import torch.nn as nn
@@ -5755,7 +5754,7 @@ def mc_predict_loader(model, loader, device, T: int = 20, temp_scale=None,
             if chol_params.dim() != 3 or chol_params.size(-1) != 6:
                 raise RuntimeError(f"[mc_predict_loader] chol_params must be (B,win,6), got {tuple(chol_params.shape)}")
 
-            # ---- 取中心时间点 ----
+            # Implementation note for the surrounding code.
             t0 = int(pred.shape[1] // 2)
 
             pred_c = pred[:, t0, :]                 # (B,3)
@@ -5790,10 +5789,10 @@ def mc_predict_loader(model, loader, device, T: int = 20, temp_scale=None,
     var_epi_n = torch.cat(all_var_epi, 0)         # (N,3)
     mean_scale2_n = torch.cat(all_scale2, 0)      # (N,3)
 
-    # Student-t aleatoric 方差：diag(Sigma) * df/(df-2)
+    # Implementation note for the surrounding code.
     var_ale_t_n = mean_scale2_n * float(t_var_factor)
 
-    # 总预测方差 = epistemic + aleatoric
+    # Implementation note for the surrounding code.
     var_pred_n = var_epi_n + var_ale_t_n
     std_pred_n = torch.sqrt(torch.clamp(var_pred_n, min=0.0))
 
@@ -5815,10 +5814,10 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
                           mc_train_mode: bool = True,
                           mode: str = "pred"):
     """
-    统一输出：MU, SD （物理单位）shape = (T_eff, 3)
+English implementation note for the surrounding code.
 
-    - 自动兼容 predict_distribution_t(...) 是否支持 dropout_only / mc_train_mode 等参数
-    - 自动兼容输出结构：dict / tuple / list
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
     import torch
@@ -5834,10 +5833,10 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
         sig = inspect.signature(fn)
         params = set(sig.parameters.keys())
     except Exception:
-        params = set()  # signature 拿不到就走 try/except 兜底
+        params = set()  # Implementation note for the surrounding code.
 
     kwargs = {}
-    # 常见参数：你代码里用过哪些就放哪些（存在才传）
+    # Implementation note for the surrounding code.
     if "Tmc" in params:
         kwargs["Tmc"] = int(Tmc)
     if "temp_scale" in params:
@@ -5849,8 +5848,8 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
     if "mode" in params:
         kwargs["mode"] = str(mode)
 
-    # ✅ 关键：dropout_only 只有在对方支持时才传
-    # （你现在的 predict_distribution_t 不支持，所以不会传，自然不报错）
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     if "dropout_only" in params:
         kwargs["dropout_only"] = True
 
@@ -5863,9 +5862,9 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
 
     out = None
     try:
-        out = fn(Xb, **kwargs) if len(params) > 0 else fn(Xb)  # params 为空就别乱传
+        out = fn(Xb, **kwargs) if len(params) > 0 else fn(Xb)  # Implementation note for the surrounding code.
     except TypeError:
-        # signature/params 判断失败时的兜底：逐步降级
+        # Implementation note for the surrounding code.
         try:
             out = fn(Xb, Tmc=int(Tmc), temp_scale=temp_scale, df=float(df))
         except TypeError:
@@ -5889,7 +5888,7 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
             if k in out:
                 sd = out[k]; break
 
-        # 有些会给 var
+        # Implementation note for the surrounding code.
         if sd is None:
             for k in ["var", "variance", "pred_var"]:
                 if k in out:
@@ -5898,12 +5897,12 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
                     break
 
     elif isinstance(out, (tuple, list)):
-        # 常见 (mu, sd) / (mu, var) / (mu, sd, extra...)
+        # Implementation note for the surrounding code.
         if len(out) >= 2:
             mu, sd = out[0], out[1]
 
-            # 如果 sd 看起来像 var（全非负且量级很大），可按需改；这里不强判，保守只处理明显 var 的情况
-            # 你也可以删掉下面这段
+            # Implementation note for the surrounding code.
+            # Implementation note for the surrounding code.
             try:
                 sd_np = _to_np(sd)
                 if (sd_np >= 0).all() and np.nanmax(sd_np) > 1e3 and np.nanmax(sd_np) > 10 * np.nanmax(_to_np(mu)**2 + 1e-12):
@@ -5926,17 +5925,17 @@ def _predict_mu_sd_compat(model, Xb, ds, device,
     mu = mu.reshape(mu.shape[0], -1)
     sd = sd.reshape(sd.shape[0], -1)
     if mu.shape[1] != 3:
-        # 兜底：如果多维，取前3
+        # Implementation note for the surrounding code.
         mu = mu[:, :3]
         sd = sd[:, :3]
 
     # ---- denormalize to physical ----
-    # 你的 ds.denormalize_y 支持 torch / numpy，这里用 torch 更稳
+    # Implementation note for the surrounding code.
     mu_t = torch.from_numpy(mu).to(device)
     sd_t = torch.from_numpy(sd).to(device)
 
     mu_phys = ds.denormalize_y(mu_t).detach().cpu().numpy()
-    # SD 的反归一：乘以 Y_std（不加均值）
+    # Implementation note for the surrounding code.
     Ys = torch.as_tensor(ds.Y_std, dtype=sd_t.dtype, device=sd_t.device).view(1, 3)
     sd_phys = (sd_t * Ys).detach().cpu().numpy()
 
@@ -5969,7 +5968,7 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
 
     # ---------------- main ----------------
     L, Tn, A_all, _ = ds.stack.shape
-    assert 0 <= l < L and 0 <= t < Tn, "plot_profile_at: 井位越界"
+    assert 0 <= l < L and 0 <= t < Tn, "English implementation note for the surrounding code."
     h = ds.win // 2
 
     line_ctx = int(getattr(ds, "line_ctx", 1))
@@ -6046,7 +6045,7 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
 
     Xb = torch.stack(X_list, 0).to(device)
 
-    # ---------------- add_line_diff 与训练保持一致 ----------------
+    # Implementation note for the surrounding code.
     if bool(getattr(ds, "add_line_diff", False)):
         A = int(len(ang_idx))
         if Xb.dim() == 4 and Xb.size(1) == A:
@@ -6124,7 +6123,7 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
     MU = MU[:n]
     SD = SD[:n]
 
-    # 仍然算 R²，但不显示在图上
+    # Implementation note for the surrounding code.
     r2_list = [_r2_1d(y_true_eff[:, i], MU[:, i]) for i in range(3)]
     r2_mean = np.nanmean(r2_list) if np.isfinite(np.nanmean(r2_list)) else np.nan
 
@@ -6134,14 +6133,14 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
         r"$\rho$"
     ]
 
-    # ================== 这里开始是你要的新版排版 ==================
+    # Implementation note for the surrounding code.
     fig, axes = plt.subplots(
         1, 3,
-        figsize=(7.2, 12.0),   # 更窄，更像你第二张图
+        figsize=(7.2, 12.0),   # Implementation note for the surrounding code.
         sharey=True
     )
 
-    # 只显示 18~100
+    # Implementation note for the surrounding code.
     y_min_show, y_max_show = 18, 100
 
     for i, ax in enumerate(axes):
@@ -6156,17 +6155,17 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
         )
 
         ax.grid(alpha=0.25)
-        ax.set_ylim(y_max_show, y_min_show)   # 反转 + 限定 18~100
+        ax.set_ylim(y_max_show, y_min_show)   # Implementation note for the surrounding code.
         ax.tick_params(axis="x", labelsize=8)
         ax.tick_params(axis="y", labelsize=8)
 
-        # 去掉顶部标题
+        # Implementation note for the surrounding code.
         ax.set_title("")
 
-        # 去掉底部 xlabel
+        # Implementation note for the surrounding code.
         ax.set_xlabel("")
 
-        # 把 VP / VS / RHOB 放到底部
+        # Implementation note for the surrounding code.
         ax.text(
             0.5, -0.035, labs[i],
             transform=ax.transAxes,
@@ -6177,11 +6176,11 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
     axes[0].set_ylabel("Time (s)" if space == "time" else "Depth index (tau)", fontsize=10)
 
 
-    # 图例放右上角，和你原图接近
+    # Implementation note for the surrounding code.
     handles, labels_ = axes[0].get_legend_handles_labels()
     fig.legend(handles, labels_, loc="upper right", frameon=True, fontsize=9)
 
-    # 更像第二张图的紧凑排版
+    # Implementation note for the surrounding code.
     plt.subplots_adjust(left=0.08, right=0.94, top=0.93, bottom=0.09, wspace=0.10)
 
     fn = os.path.join(out_dir, f"{tag}_l{l}_t{t}_clean.png")
@@ -6191,20 +6190,20 @@ def plot_profile_at(model, ds, device, l, t, out_dir,
 
 
 
-# ===== Metrics: R2 / RMSE（按通道+总体统计，另存 CSV） =====
+# Implementation note for the surrounding code.
 def compute_metrics_and_save(y_true_d, y_pred_d, out_dir, tag="val"):
     """
-    y_true_d / y_pred_d: 物理空间 (N,3)
-    产物：
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
       - metrics_{tag}.json
       - metrics_{tag}.csv
-      - 控制台摘要
+English implementation note for the surrounding code.
 
-    新增：
+English implementation note for the surrounding code.
       - per-channel: MAE, Corr
       - overall: MAE, Corr
       - top-level: mean_mae, std_mae, mean_corr, std_corr
-      - 兼容数组风格导出: mae_d / rmse_d / r2_d / corr_d
+English implementation note for the surrounding code.
     """
     import json, os, csv
     import numpy as np
@@ -6245,7 +6244,7 @@ def compute_metrics_and_save(y_true_d, y_pred_d, out_dir, tag="val"):
         corrs.append(_corr(yt, yp))
 
     # -------------------------
-    # overall（把三通道拼一起）
+    # Implementation note for the surrounding code.
     # -------------------------
     yt_all = y_true_d.reshape(-1)
     yp_all = y_pred_d.reshape(-1)
@@ -6275,7 +6274,7 @@ def compute_metrics_and_save(y_true_d, y_pred_d, out_dir, tag="val"):
             "Corr": float(corr_overall) if np.isfinite(corr_overall) else None,
         },
 
-        # 便于你后面论文表直接取
+        # Implementation note for the surrounding code.
         "mean_rmse": float(np.mean(rmses)),
         "std_rmse": float(np.std(rmses)),
         "mean_mae": float(np.mean(maes)),
@@ -6283,7 +6282,7 @@ def compute_metrics_and_save(y_true_d, y_pred_d, out_dir, tag="val"):
         "mean_corr": float(np.nanmean(corrs)),
         "std_corr": float(np.nanstd(corrs)),
 
-        # 兼容你 baseline 那种数组风格
+        # Implementation note for the surrounding code.
         "mae_d": [float(x) for x in maes],
         "rmse_d": [float(x) for x in rmses],
         "r2_d": [float(x) for x in r2s],
@@ -6346,14 +6345,14 @@ def _ricker(length=101, dt=0.001, fdom=45.0):
 @torch.no_grad()
 def predict_distribution_t(model, Xb, ds, device, Tmc: int = 30, temp_scale=None, df: float = 4.0):
     """
-    Xb: torch Tensor (支持 2.5D: [B,A,line_ctx,win] 或 1D: [B,in_dim])
+English implementation note for the surrounding code.
     return:
-      MU_phys, SD_phys   (物理单位, SD 是 t predictive std 的 epi+ale 合成)
+English implementation note for the surrounding code.
     """
 
     df_use = float(getattr(model, "student_df", df))
     was_training = model.training
-    model.train()  # 采样模式
+    model.train()  # Implementation note for the surrounding code.
 
     mus = []
     ales = []
@@ -6372,7 +6371,7 @@ def predict_distribution_t(model, Xb, ds, device, Tmc: int = 30, temp_scale=None
         mus.append(pred.detach().cpu())
 
         if logvar is not None:
-            scale = torch.exp(0.5 * logvar.detach().cpu())  # t 的 scale
+            scale = torch.exp(0.5 * logvar.detach().cpu())  # Implementation note for the surrounding code.
             std_t = scale * float((df_use / (df_use - 2.0)) ** 0.5)  # ✅ predictive std
             ales.append(std_t)
 
@@ -6398,7 +6397,7 @@ def predict_distribution_t(model, Xb, ds, device, Tmc: int = 30, temp_scale=None
 
 def _maybe_add_line_diff(Xb: torch.Tensor, ds) -> torch.Tensor:
     """
-    若 ds.add_line_diff=True 且 Xb 是 [B, A, line_ctx, win]，则拼成 [B, 2A, line_ctx, win]:
+English implementation note for the surrounding code.
       Xd = X - X_center
       cat([X, Xd], dim=1)
     """
@@ -6409,10 +6408,10 @@ def _maybe_add_line_diff(Xb: torch.Tensor, ds) -> torch.Tensor:
         return Xb
 
     A = int(len(getattr(ds, "angles_idx", []))) if getattr(ds, "angles_idx", None) is not None else int(Xb.size(1))
-    # A 的更稳取法：以当前 Xb 的通道数作为 raw A
+    # Implementation note for the surrounding code.
     A = int(Xb.size(1))
 
-    # 已经是 2A 就不动
+    # Implementation note for the surrounding code.
     if Xb.size(1) == 2 * A:
         return Xb
 
@@ -6428,8 +6427,8 @@ def _maybe_add_line_diff(Xb: torch.Tensor, ds) -> torch.Tensor:
 @torch.no_grad()
 def fit_sigma_temperature(model, loader, device, ds, conf_levels=(0.5,0.68,0.8,0.9,0.95), T=30):
     """
-    在验证集上拟合一个标量 τ，使得采用 σ' = τ·σ 的覆盖率更接近名义置信度。
-    返回: tau(float)
+English implementation note for the surrounding code.
+    return: tau(float)
     """
     from scipy.stats import norm
     was_training = model.training
@@ -6447,14 +6446,14 @@ def fit_sigma_temperature(model, loader, device, ds, conf_levels=(0.5,0.68,0.8,0
 
     mu_n = torch.stack(mus,0).mean(0).numpy()
     epi  = torch.stack(mus,0).std(0).numpy()
-    # 反归一化
+    # denormalize
     y_true = []
     for _, y, _ in loader: y_true.append(y)
     y_true = torch.cat(y_true,0).numpy() * ds.Y_std[None,:] + ds.Y_mean[None,:]
     mu_d   = mu_n * ds.Y_std[None,:] + ds.Y_mean[None,:]
     std_d  = epi  * ds.Y_std[None,:]
 
-    # 用简单的一维 τ 最小化平方误差
+    # Implementation note for the surrounding code.
     def coverage(tau):
         covs=[]
         for a in conf_levels:
@@ -6497,7 +6496,7 @@ def _gather_val_truth_denorm(val_loader, ds_all):
 @torch.no_grad()
 def _gather_val_flags(val_loader):
     """
-    收集所有样本是否属于井附近的标记，兼容 3/4 元组。
+English implementation note for the surrounding code.
     """
     flags = []
     for batch in val_loader:
@@ -6537,11 +6536,11 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
                                    spec_norm: bool = False,
                                    df: float = 4.0):
     """
-    ✅ 2.5D 口径：输入构造为 [B, A, line_ctx, win]
-    ✅ 中心点兼容版：
-      - 当前模型输出 (mu_attr, chol_params, d_rec, kl)
-      - 取中心时间点 t0 = win//2
-      - 由联合协方差对角线得到 ±1σ
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import os
     import numpy as np
@@ -6553,7 +6552,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
 
     os.makedirs(out_dir, exist_ok=True)
     df_use = float(getattr(model, "student_df", df))
-    # ---------- 小工具 ----------
+    # ---------- helper ----------
     def _ricker_vec(L=101, dt=0.001, fdom=45.0):
         tt = (np.arange(L, dtype=np.float32) - L // 2) * dt
         x = np.pi * fdom * tt
@@ -6656,9 +6655,9 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
         k = int(np.argmax(c))
         return float(c[k] / len(x)), int(lags[k])
 
-    # ---------- 边界 & 参数 ----------
+    # Implementation note for the surrounding code.
     Ls, Ts, A_all, N_stack = ds.stack.shape
-    assert 0 <= l < Ls and 0 <= t < Ts, "井位越界"
+    assert 0 <= l < Ls and 0 <= t < Ts, "English implementation note for the surrounding code."
     h = ds.win // 2
 
     line_ctx = int(getattr(ds, "line_ctx", 1))
@@ -6670,7 +6669,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
     if tau_stride < 1:
         tau_stride = 1
 
-    # ✅ 频谱用的 dt（考虑 stride）
+    # Implementation note for the surrounding code.
     dt_eff = float(dt) * float(tau_stride)
 
     # ---------- angles_idx -> array ----------
@@ -6693,7 +6692,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
 
     use_angle_time = (X_mean_all.ndim == 2)
 
-    # ---------- 真值（Mod） ----------
+    # Implementation note for the surrounding code.
     Y = ds.mod[l, t, ds.props_idx, :].astype(np.float32)
     if Y.ndim == 2 and Y.shape[0] == 3:
         Y = Y.T
@@ -6702,14 +6701,14 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
     else:
         raise ValueError(f"Unexpected Mod shape at well: {Y.shape}, expect (3,N) or (N,3)")
     N = int(Y.shape[0])
-    assert N > 2 * h + 1, "井剖面长度太短，不足以支撑当前 win。"
+    assert N > 2 * h + 1, "English implementation note for the surrounding code."
 
-    # ---------- Band-limited True（全长生成，再采样） ----------
+    # Implementation note for the surrounding code.
     Y_bl = np.empty_like(Y)
     for i in range(3):
         Y_bl[:, i] = _bandlimit_true(Y[:, i], dt=float(dt), fdom=float(fdom), mode=str(bl_mode))
 
-    # ---------- 2.5D：line 索引（固定不随 tau 变） ----------
+    # Implementation note for the surrounding code.
     l0 = max(0, l - r)
     l1 = min(Ls - 1, l + r)
     ls = list(range(l0, l1 + 1))
@@ -6727,13 +6726,13 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
         ls = ls[mid - half: mid - half + line_ctx]
     ls_idx = np.asarray(ls, dtype=np.int64)
 
-    # ---------- tau_list（与训练一致） ----------
+    # Implementation note for the surrounding code.
     tau_list = list(range(h, N - h, tau_stride))
     if len(tau_list) == 0:
         print(f"[WARN] no tau windows at (l={l}, t={t}) with win={ds.win}, stride={tau_stride}")
         return
 
-    # ---------- 构造 2.5D 输入 Xb ----------
+    # Implementation note for the surrounding code.
     X_list = []
     for tau in tau_list:
         s0 = tau - h
@@ -6765,7 +6764,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
 
     Xb = torch.stack(X_list, 0).to(device)  # [T_eff, A_sel, line_ctx, win]
 
-    # ---------- add_line_diff 与训练一致 ----------
+    # Implementation note for the surrounding code.
     if bool(getattr(ds, "add_line_diff", False)):
         A = int(A_sel)
         if Xb.dim() == 4 and Xb.size(1) == A:
@@ -6779,7 +6778,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
     T_eff = int(Xb.shape[0])
     depth_axis = np.asarray(tau_list, dtype=np.int64)
 
-    # ---------- MC 预测（μ/σ），并反归一化 ----------
+    # Implementation note for the surrounding code.
     was_training = bool(model.training)
     model.train()
 
@@ -6833,7 +6832,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
     MU = (mu_mean_n * Y_std_t + Y_mean_t).cpu().numpy()
     SD = (std_n * Y_std_t).cpu().numpy()
 
-    # ---------- True/BL True：采样到 tau_list 对齐 ----------
+    # Implementation note for the surrounding code.
     Yc = Y[np.asarray(tau_list, dtype=np.int64), :]
     Y_blc = Y_bl[np.asarray(tau_list, dtype=np.int64), :]
 
@@ -6871,7 +6870,7 @@ def well_vertical_resolution_check(model, ds, device, l, t, out_dir,
     plt.savefig(f3, dpi=220, bbox_inches="tight")
     plt.close()
 
-    # ========== 4) 数值指标 ==========
+    # Implementation note for the surrounding code.
     mets = []
     for i in range(3):
         rmse = float(np.sqrt(np.mean((MU[:, i] - Yc[:, i]) ** 2)))
@@ -6907,20 +6906,20 @@ def _group_indices_by_lt(ds, indices):
 
 def build_section_indices_for_trace(ds_all, t_fixed: int):
     """
-    固定 trace=t_fixed，收集 (line=l, tau) 的样本索引，构成 line–time 网格。
+English implementation note for the surrounding code.
 
-    返回：
+    return: 
       l_list:   sorted unique lines
       tau_list: sorted unique taus
-      valid_gidx: 按 (li, tj) 扫描顺序排列的 global idx（稳定！）
-      valid_pos:  与 valid_gidx 对齐的 (li, tj)
-      grid_idx:   [L, Nt] full-grid 映射（缺失=-1），便于检查/可视化
-      missing:    缺失点数量（missing>0 基本必然块状）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
 
     if not hasattr(ds_all, "samples"):
-        raise RuntimeError("[B2] ds_all.samples 不存在。")
+        raise RuntimeError("English implementation note for the surrounding code.")
 
     samples = np.asarray(ds_all.samples)  # [N,3] -> (l,t,tau)
     l_arr   = samples[:, 0].astype(np.int64)
@@ -6932,7 +6931,7 @@ def build_section_indices_for_trace(ds_all, t_fixed: int):
     if idxs.size == 0:
         return [], [], [], [], None, 0
 
-    # 轴
+    # Implementation note for the surrounding code.
     l_list   = np.unique(l_arr[idxs]);   l_list.sort()
     tau_list = np.unique(tau_arr[idxs]); tau_list.sort()
 
@@ -6940,7 +6939,7 @@ def build_section_indices_for_trace(ds_all, t_fixed: int):
     l2i   = {int(v): i for i, v in enumerate(l_list.tolist())}
     tau2i = {int(v): j for j, v in enumerate(tau_list.tolist())}
 
-    # full-grid 映射：缺失=-1
+    # Implementation note for the surrounding code.
     grid_idx = -np.ones((L, Nt), dtype=np.int64)
 
     dup = 0
@@ -6954,11 +6953,11 @@ def build_section_indices_for_trace(ds_all, t_fixed: int):
 
     missing = int(np.sum(grid_idx < 0))
     if missing > 0:
-        print(f"[B2][WARN] trace t={t_fixed}: missing={missing}/{L*Nt} (缺点越多越块状)")
+        print(f"[B2][WARN] trace t={t_fixed}: missing={missing}/{L*Nt} (more missing points may cause blockier profiles)")
     if dup > 0:
         print(f"[B2][WARN] trace t={t_fixed}: duplicated (l,tau) ignored dup={dup}")
 
-    # ✅ 稳定顺序：按 li->tj 扫描（你永远知道 k 对应哪个格子）
+    # Implementation note for the surrounding code.
     valid_pos = np.argwhere(grid_idx >= 0)                # [M,2] (li,tj)
     valid_gidx = grid_idx[grid_idx >= 0].astype(np.int64) # [M]
 
@@ -6978,21 +6977,21 @@ def mc_predict_section_mean(model, ds_all, device, t_fixed: int,
                             batch_size=2048, collate_fn=None,
                             mc_train_mode=True):
     """
-    固定 trace=t_fixed，对整张 line–time 剖面做 MC 预测，输出物理空间均值剖面（full-grid 装配）。
-    返回 dict:
-      mean: [L, Nt, 3] (VP/VS/RHOB) 物理单位
+English implementation note for the surrounding code.
+    return dict:
+English implementation note for the surrounding code.
       l_list, tau_list
-      missing: 缺失点数量（full-grid 缺点会导致块状）
+English implementation note for the surrounding code.
     """
     import numpy as np
     import torch
     from torch.utils.data import DataLoader, Subset
 
     # -----------------------------
-    # B2-FIG9-① full-grid 索引构造
+    # B2-FIG9-① full-grid indexconstruct
     # -----------------------------
     if not hasattr(ds_all, "samples"):
-        raise RuntimeError("[FIG9] ds_all.samples 不存在，无法构造 2D 剖面索引。")
+        raise RuntimeError("English implementation note for the surrounding code.")
 
     samples = np.asarray(ds_all.samples)
     l_arr   = samples[:, 0].astype(int)
@@ -7011,7 +7010,7 @@ def mc_predict_section_mean(model, ds_all, device, t_fixed: int,
     l2i   = {int(v): i for i, v in enumerate(l_list)}
     tau2i = {int(v): j for j, v in enumerate(tau_list)}
 
-    grid_idx = -np.ones((L, Nt), dtype=np.int64)  # full-grid: 缺点=-1
+    grid_idx = -np.ones((L, Nt), dtype=np.int64)  # Implementation note for the surrounding code.
     dup = 0
     for gi in idxs:
         ii = l2i[int(l_arr[gi])]
@@ -7023,11 +7022,11 @@ def mc_predict_section_mean(model, ds_all, device, t_fixed: int,
 
     missing = int(np.sum(grid_idx < 0))
     if missing > 0:
-        print(f"[FIG9][WARN] section not full grid: missing={missing}/{L*Nt} -> 图可能块状/断裂")
+        print(f"[FIG9][WARN] section is not a full grid: missing={missing}/{L*Nt} -> the figure may appear blocky or discontinuous")
     if dup > 0:
         print(f"[FIG9][WARN] duplicated (l,tau) ignored: dup={dup}")
 
-    # 只跑 valid 点（顺序固定）
+    # Implementation note for the surrounding code.
     valid_pos = np.argwhere(grid_idx >= 0)             # [M,2] (li, tj)
     valid_gidx = grid_idx[grid_idx >= 0].astype(int)   # [M]
     M = int(valid_gidx.shape[0])
@@ -7046,7 +7045,7 @@ def mc_predict_section_mean(model, ds_all, device, t_fixed: int,
     )
 
     # -----------------------------
-    # B2-FIG9-② MC 模式：建议 train() 做 MC（dropout/BNN更像MC）
+    # Implementation note for the surrounding code.
     # -----------------------------
     prev_train = model.training
     if bool(mc_train_mode):
@@ -7056,19 +7055,19 @@ def mc_predict_section_mean(model, ds_all, device, t_fixed: int,
 
     mean_n, std_n = mc_predict_loader(model, loader, device, T=int(Tmc), temp_scale=temp_scale)
 
-    # 恢复模型状态
+    # Implementation note for the surrounding code.
     model.train(prev_train)
 
-    # 还原到物理空间（均值）
+    # Implementation note for the surrounding code.
     mean_d = mean_n * ds_all.Y_std[None, :] + ds_all.Y_mean[None, :]
 
     # -----------------------------
-    # B2-FIG9-③ pack 回 full-grid
+    # Implementation note for the surrounding code.
     # -----------------------------
     C = mean_d.shape[1]
     sec_mean = np.full((L, Nt, C), np.nan, dtype=np.float32)
 
-    # mean_d 的顺序 == loader 的顺序 == valid_gidx 的顺序
+    # Implementation note for the surrounding code.
     for k, (li, tj) in enumerate(valid_pos):
         sec_mean[int(li), int(tj), :] = mean_d[k, :]
 
@@ -7080,25 +7079,25 @@ def mc_predict_section_mean_fullgrid(
     Tmc=30, temp_scale=None,
     batch_size=2048, collate_fn=None,
     mc_train_mode=True,
-    # ✅ NEW: 控制 2.5D line_ctx 的推理使用方式（不改网络结构）
+    # Implementation note for the surrounding code.
     ctx_mode="none",        # "none" | "center_repeat" | "mid3_keep"
-    keep_k=3,               # mid3_keep 保留中间 k 条（推荐 3）
+    keep_k=3,               # Implementation note for the surrounding code.
 ):
     """
-    dataset 侧补齐 full-grid：对给定 (l_list_full × tau_list_full) 上的所有点真正跑模型
-    返回 dict: mean[L,Nt,3], l_list, tau_list, missing=0
+English implementation note for the surrounding code.
+    return dict: mean[L,Nt,3], l_list, tau_list, missing=0
 
     ctx_mode:
-      - "none": 原样使用 X 的 line_ctx
-      - "center_repeat": 只用中心线（中心线复制到所有 line_ctx）
-      - "mid3_keep": 只保留中间 k 条真实横向，其余用中心线填充（shape 不变）
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
     """
     import numpy as np
     import torch
     from torch.utils.data import DataLoader
 
     # -----------------------------
-    # 1) 构造 full-grid samples
+    # 1) construct full-grid samples
     # -----------------------------
     l_list_full = list(map(int, l_list_full))
     tau_list_full = list(map(int, tau_list_full))
@@ -7120,19 +7119,19 @@ def mc_predict_section_mean_fullgrid(
     )
 
     # -----------------------------
-    # 3) MC 推理（逐 batch，支持 ctx_mode）
-    #    我们不直接用 mc_predict_loader（因为要改 X）
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     # -----------------------------
     prev_train = model.training
     model.train() if bool(mc_train_mode) else model.eval()
 
     preds_T = []  # list of [M_batch, 3] per MC, then concat
     with torch.no_grad():
-        # 先把所有 batch 的 X 缓存到 device 侧（避免每次 MC 重读/重拷贝）
-        # 但如果显存不够，可以改成不缓存（按 MC 循环读 batch）
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         cached_batches = []
         for batch in loader:
-            # 兼容 batch 结构：可能是 (X, meta) / (X,y,meta) / (X,y,y_bl,meta)
+            # Implementation note for the surrounding code.
             if isinstance(batch, (list, tuple)):
                 if len(batch) == 4:
                     X, y, y_bl, metas = batch
@@ -7144,7 +7143,7 @@ def mc_predict_section_mean_fullgrid(
                     y = None
                     y_bl = None
                 else:
-                    # 兜底：把第一个当 X，最后一个当 metas
+                    # Implementation note for the surrounding code.
                     X = batch[0]
                     metas = batch[-1]
                     y = None
@@ -7154,13 +7153,13 @@ def mc_predict_section_mean_fullgrid(
 
             X = X.to(device, non_blocking=True)
 
-            # ===== ctx_mode 处理：X shape [B, A, line_ctx, win] =====
+            # Implementation note for the surrounding code.
             if ctx_mode in ("center_repeat", "mid3_keep"):
                 if X.ndim >= 4:
                     lc = int(X.shape[2])
                     mid = lc // 2
                     X_mid = X[:, :, mid:mid + 1, :]          # [B,A,1,win]
-                    X_new = X_mid.repeat(1, 1, lc, 1)        # 全部先填中心线
+                    X_new = X_mid.repeat(1, 1, lc, 1)        # Implementation note for the surrounding code.
 
                     if ctx_mode == "mid3_keep":
                         k = int(keep_k)
@@ -7174,11 +7173,11 @@ def mc_predict_section_mean_fullgrid(
                         half = k // 2
                         lo = max(0, mid - half)
                         hi = min(lc, mid + half + 1)
-                        X_new[:, :, lo:hi, :] = X[:, :, lo:hi, :]  # 中间 k 条真实横向放回去
+                        X_new[:, :, lo:hi, :] = X[:, :, lo:hi, :]  # Implementation note for the surrounding code.
 
                     X = X_new
                 else:
-                    # shape 不符合 2.5D，就忽略
+                    # Implementation note for the surrounding code.
                     pass
 
             cached_batches.append((X, y, y_bl, metas))
@@ -7208,7 +7207,7 @@ def mc_predict_section_mean_fullgrid(
                 else:
                     raise RuntimeError("Model output must be tuple/list")
 
-                # ✅ 中心点兼容：mu_attr [B,win,3] -> [B,3]
+                # Implementation note for the surrounding code.
                 if mu_attr.dim() == 3 and mu_attr.size(-1) == 3:
                     t0 = int(mu_attr.shape[1] // 2)
                     mu = mu_attr[:, t0, :]   # [B,3]
@@ -7229,12 +7228,12 @@ def mc_predict_section_mean_fullgrid(
 
         all_mc = np.stack(all_mc, axis=0).astype(np.float32)  # [T,M,3]
         mean_d = np.mean(all_mc, axis=0)                      # [M,3]
-        # std_d = np.std(all_mc, axis=0)  # 如需可返回
+        # Implementation note for the surrounding code.
 
     model.train(prev_train)
 
     # -----------------------------
-    # 4) reshape 回 [L, Nt, 3]
+    # Implementation note for the surrounding code.
     # -----------------------------
     L = len(l_list_full)
     Nt = len(tau_list_full)
@@ -7297,7 +7296,7 @@ def plot_section_mean_fig9_fullcrop(
     tau_arr = np.asarray(tau_list, dtype=np.float32)
 
     # =========================
-    # x 轴：Distance (m)
+    # Implementation note for the surrounding code.
     # =========================
     x_vals = float(x0) + l_arr * float(dx)
     x_left = float(x_vals[0])
@@ -7305,7 +7304,7 @@ def plot_section_mean_fig9_fullcrop(
     xlabel = "Distance (m)"
 
     # =========================
-    # y 轴：Time (ms)
+    # Implementation note for the surrounding code.
     # =========================
     t_ms = tau_arr * float(dt) * 1000.0
     y_bottom = float(t_ms[-1])
@@ -7338,7 +7337,7 @@ def plot_section_mean_fig9_fullcrop(
     })
 
     # ==========================================================
-    # ✅ 改成 3 行 1 列竖向排列
+    # Implementation note for the surrounding code.
     # ==========================================================
     fig, axes = plt.subplots(
         3, 1,
@@ -7369,7 +7368,7 @@ def plot_section_mean_fig9_fullcrop(
         ax.set_title(title_list[i], pad=8)
         ax.set_ylabel(ylabel)
 
-        # 只在最下面一幅图显示横坐标
+        # Implementation note for the surrounding code.
         if i == 2:
             ax.set_xlabel(xlabel)
         else:
@@ -7383,7 +7382,7 @@ def plot_section_mean_fig9_fullcrop(
         ax.grid(False)
 
     # =========================
-    # 保存
+    # Implementation note for the surrounding code.
     # =========================
     out_png = os.path.abspath(str(out_png))
     out_dir = os.path.dirname(out_png)
@@ -7916,14 +7915,14 @@ def run_eval_and_plots(model, ds_all, val_loader, device, args,
 
 
 def _warmup_weight(ep: int, warmup_epochs: int, final_weight: float, mode: str = "linear") -> float:
-    """返回当前 epoch 的 warmup 权重 (线性/余弦)"""
+    """English implementation note for the surrounding code."""
     if warmup_epochs is None or warmup_epochs <= 0:
         return float(final_weight)
     if ep <= warmup_epochs:
         if mode == "cos":
-            # 余弦升温，更平滑
+            # Implementation note for the surrounding code.
             return float(final_weight) * 0.5 * (1.0 - math.cos(math.pi * ep / float(warmup_epochs)))
-        # 线性升温
+        # Implementation note for the surrounding code.
         return float(final_weight) * (ep / float(warmup_epochs))
     return float(final_weight)
 
@@ -8244,11 +8243,11 @@ def main():
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--lr", type=float, default=1e-3)
-    # ---- LR (兼容老参数) ----
+    # Implementation note for the surrounding code.
     ap.add_argument("--lr_main", type=float, default=None,
-                    help="主网络学习率；若不填则用 --lr")
+                    help="English implementation note for the surrounding code.")
     ap.add_argument("--lr_phys", type=float, default=None,
-                    help="物理核学习率；若不填则取 lr_main 的一半")
+                    help="English implementation note for the surrounding code.")
 
     ap.add_argument("--hidden", type=int, default=256)
     ap.add_argument("--beta_kl", type=float, default=1e-5)
@@ -8258,7 +8257,7 @@ def main():
     ap.add_argument("--val_ratio", type=float, default=0.1)
     ap.add_argument("--out", type=str, default="bnn_ckpt_physics")
 
-    # wells 初始参数（供 auto calibrate 搜索中心值）
+    # Implementation note for the surrounding code.
     ap.add_argument("--wells_line_origin", type=float, default=2064.0)
     ap.add_argument("--wells_trace_origin", type=float, default=1677.0)
     ap.add_argument("--wells_line_scale", type=float, default=451.0/(2334.0-2064.0))
@@ -8274,9 +8273,9 @@ def main():
     ap.add_argument("--phys_standardize", action="store_true", default=True)
 
     ap.add_argument("--loow_names", type=str, default="",
-                    help="留井验证：用 Excel 的井名选择，多口以分号分隔，如 'WellA;WellB'")
+                    help="English implementation note for the surrounding code.")
     ap.add_argument("--loow_rows", type=str, default="",
-                    help="留井验证：用 Excel 的行号(1-based)选择，多行以分号分隔，如 '2;7;12'")
+                    help="English implementation note for the surrounding code.")
 
     ap.add_argument("--lambda_lat", type=float, default=0.02,
                         help="lateral continuity loss weight (line direction)")
@@ -8297,11 +8296,11 @@ def main():
     ap.add_argument("--dilations", nargs="+", type=int, default=[1, 2, 4, 8])
     ap.add_argument("--recon", type=str, default="student", choices=["student", "gauss"])
     ap.add_argument("--dt", type=float, default=0.001,
-                    help="时间采样间隔(秒)，用于频谱损失/带限卷积，fs=1/dt")
+                    help="English implementation note for the surrounding code.")
     ap.add_argument(
         "--lambda_vaim",
         type=float,
-        default=0.10,  # 和你之前硬编码 0.07 保持一致
+        default=0.10,  # Implementation note for the surrounding code.
         help="weight of VAIM band-limited prior loss"
     )
     ap.add_argument("--warm_vaim_ep", type=int, default=0,
@@ -8309,12 +8308,12 @@ def main():
     ap.add_argument("--vaim_ramp_len", type=int, default=5,
                     help="ramp length epochs to reach args.lambda_vaim")
     ap.add_argument("--n_comp", type=int, default=3)
-    # ---- 低频先验相关参数（额外约束 A 的低频部分）----
+    # Implementation note for the surrounding code.
     ap.add_argument("--lf_cut", type=float, default=8.0,
-                    help="低频先验截止频率(Hz)，默认 8Hz，可按区域低频趋势调整")
+                    help="English implementation note for the surrounding code.")
     ap.add_argument("--lf_weight", type=float, default=0.10,
-                    help="低频先验 loss 权重，默认 0.10，可在 0.05~0.2 间微调")
-    # 物理带限先验 + 岩石物理先验的权重
+                    help="English implementation note for the surrounding code.")
+    # Implementation note for the surrounding code.
     ap.add_argument(
         "--prior_weight", type=float, default=0.03,
         help="weight for band-limited / low-frequency prior in PhysicsInformedLossLearnable"
@@ -8329,9 +8328,9 @@ def main():
     ap.add_argument("--dropout", type=float, default=0.1)
     ap.add_argument("--weight_decay", type=float, default=0.01)
     args = ap.parse_args()
-    # 兼容老参：如果没传 lr_main / lr_phys，就从 lr 推导
+    # Implementation note for the surrounding code.
     if getattr(args, "lr_main", None) is None:
-        args.lr_main = args.lr  # 用老的 --lr
+        args.lr_main = args.lr  # Implementation note for the surrounding code.
     if getattr(args, "lr_phys", None) is None:
         args.lr_phys = max(1e-6, float(args.lr_main) * 0.5)
 
@@ -8341,7 +8340,7 @@ def main():
     stack4d, key_s = load_4d(args.stack)
     mod4d,   key_m = load_4d(args.mod)
 
-    # 快速体检（含 RHOB）
+    # Implementation note for the surrounding code.
     quick_stats("Stack(angle0)", stack4d[:,:,0,:])
     quick_stats("Stack(angle1)", stack4d[:,:,1,:])
     quick_stats("Stack(angle2)", stack4d[:,:,2,:])
@@ -8351,12 +8350,12 @@ def main():
 
     os.makedirs(args.out, exist_ok=True)
 
-    # ---------- A) 读取井表 + 自动标定 +（可选）按井名/行号选择 LOOW（直接替换整段） ----------
+    # Implementation note for the surrounding code.
     wells = None
-    loow_pairs_vol = []  # [(l_idx, t_idx), ...] 体坐标（用于留井验证：可扩展为“井邻域”而非单点）
+    loow_pairs_vol = []  # Implementation note for the surrounding code.
 
     def _expand_area_pairs(core_pairs, L, T, R):
-        """把 LOOW 井中心点扩展成 (l,t) 邻域集合（去重+clip）"""
+        """English implementation note for the surrounding code."""
         R = int(max(0, R))
         out = set()
         for (l0, t0) in core_pairs:
@@ -8370,7 +8369,7 @@ def main():
         return sorted(list(out))
 
     if getattr(args, "wells_xlsx", None):
-        # 1) 读工程线/道，做自动标定，得到用于训练/采样的 wells（体坐标）
+        # Implementation note for the surrounding code.
         wells_raw_all = load_wells_xlsx(args.wells_xlsx, base=1, swap_lt=True)
         L, T = int(stack4d.shape[0]), int(stack4d.shape[1])
 
@@ -8383,7 +8382,7 @@ def main():
         )
         print("[AUTO-WELLS] Using calibrated params:", best_params)
 
-        # 2) （可选）从 Excel 第一列“井名”筛选留井；或用行号筛选
+        # Implementation note for the surrounding code.
         try:
             import pandas as pd
             df = pd.read_excel(args.wells_xlsx, header=None, engine="openpyxl")
@@ -8391,7 +8390,7 @@ def main():
             import pandas as pd
             df = pd.read_excel(args.wells_xlsx, header=None)
 
-        # 约定：第一列=井名，第二列=线号(工程坐标)，第三列=道号(工程坐标)
+        # Implementation note for the surrounding code.
         df = df.iloc[:, :3].copy()
         df.columns = ["name", "line_eng", "trace_eng"]
 
@@ -8403,7 +8402,7 @@ def main():
             want = [x.strip() for x in str(loow_names).split(";") if x.strip()]
             pick_df = df[df["name"].astype(str).isin(want)].copy()
             if len(pick_df) == 0:
-                print(f"[LOOW][WARN] 井名未匹配到：{want}")
+                print(f"[LOOW][WARN] well name not matched: {want}")
 
         elif loow_rows:
             try:
@@ -8412,16 +8411,16 @@ def main():
                 rows = []
             rows_1based_in = [r for r in rows if 1 <= r <= len(df)]
             if len(rows_1based_in) < len(rows):
-                print("[LOOW][WARN] 有行号越界，已忽略。")
+                print("English implementation note for the surrounding code.")
             if rows_1based_in:
                 pick_df = df.iloc[[r - 1 for r in rows_1based_in]].copy()
 
-        # 3) 把选中的 LOOW 井（工程线/道）用“最佳参数”映射到体索引
+        # Implementation note for the surrounding code.
         if pick_df is not None and len(pick_df) > 0:
             wells_raw_loow = pick_df[["line_eng", "trace_eng"]].to_numpy()
 
-            # 注意：训练 wells_raw_all 用 swap_lt=True 读进来（可能发生过交换）
-            # LOOW 这里列是 (line_eng, trace_eng)，需要与 best_params 的 swap 逻辑一致：
+            # Implementation note for the surrounding code.
+            # Implementation note for the surrounding code.
             swap_for_loow = not bool(best_params.get("swap", False))
 
             loow_vol = map_wells_to_volume(
@@ -8445,7 +8444,7 @@ def main():
                     loow_core):
                 print(f"[DEBUG] LOOW {nm}: eng(line,trace)=({le},{te}) -> vol(l,t)=({lv},{tv})")
 
-            # ✅ 建议：LOOW 留“井邻域”而不是只留中心点，防止空间泄露
+            # Implementation note for the surrounding code.
             holdout_R = int(getattr(args, "loow_holdout_radius", args.well_radius))
             loow_pairs_vol = _expand_area_pairs(loow_core, L, T, holdout_R)
 
@@ -8454,19 +8453,19 @@ def main():
 
         else:
             if loow_names or loow_rows:
-                print("[LOOW][WARN] 未从 Excel 选到 LOOW 井；将采用常规分层验证。")
+                print("English implementation note for the surrounding code.")
 
     # ==========================================================
-    # ✅ Marmousi2 synthetic：没有真实井表时自动创建 5 个伪井
-    #    - Well1 / Well2 / Well4 / Well5 参与训练
-    #    - Well3 作为 LOOW 验证井
-    #    注意：Marmousi2 转换后的 T 通常为 1，因此 t_idx 固定为 0。
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     # ==========================================================
     if (wells is None) or (len(wells) == 0):
         L, T = int(stack4d.shape[0]), int(stack4d.shape[1])
 
-        # 选择 5 个横向位置，避开边界，并覆盖左、中、右区域
-        # 对 L=560，大致对应 line = 89, 179, 280, 380, 470
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         pseudo_line_fracs = [0.16, 0.32, 0.50, 0.68, 0.84]
 
         pseudo_wells = np.array([
@@ -8477,12 +8476,12 @@ def main():
             for frac in pseudo_line_fracs
         ], dtype=np.int32)
 
-        # clip 防止极端尺寸越界
+        # Implementation note for the surrounding code.
         pseudo_wells[:, 0] = np.clip(pseudo_wells[:, 0], 0, L - 1)
         pseudo_wells[:, 1] = np.clip(pseudo_wells[:, 1], 0, T - 1)
 
-        # 5 个都标记为 well；
-        # split 时 Well3 被放入验证集，Well1/Well2/Well4/Well5 留在训练集
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         wells = pseudo_wells
 
         pseudo_train_core = [
@@ -8496,14 +8495,14 @@ def main():
             (int(pseudo_wells[2, 0]), int(pseudo_wells[2, 1]))   # Well3
         ]
 
-        # 留井验证区域：至少覆盖 line_ctx 的半宽，避免 2.5D patch 泄漏
+        # Implementation note for the surrounding code.
         holdout_R = max(
             int(getattr(args, "well_radius", 0)),
             int(getattr(args, "line_ctx", 1)) // 2 + 1
         )
         loow_pairs_vol = _expand_area_pairs(pseudo_val_core, L, T, holdout_R)
 
-        # 传给最终绘图函数，优先选择这个验证伪井
+        # Implementation note for the surrounding code.
         args._pseudo_val_lt = pseudo_val_core[0]
 
         print(
@@ -8515,12 +8514,12 @@ def main():
         print(f"[PSEUDO-WELL] LOOW holdout area size={len(loow_pairs_vol)} (R={holdout_R})")
 
     # ==========================================================
-    # ✅ Helper: 2.5D 邻线泄漏防护（正确带宽：±hl）
+    # Implementation note for the surrounding code.
     # ==========================================================
     def apply_25d_guard(ds, train_indices, val_indices):
         """
-        2.5D 防泄漏：剔除 train 中会在输入 patch 里“看到” val 的样本
-        条件：同 trace(t) 且 |l_train - l_val| <= hl
+English implementation note for the surrounding code.
+English implementation note for the surrounding code.
         """
         train_indices = np.asarray(train_indices, dtype=np.int64)
         val_indices = np.asarray(val_indices, dtype=np.int64)
@@ -8551,7 +8550,7 @@ def main():
         return train_indices[keep]
 
     # ==========================================================
-    # ✅ Helper: 强自检（同 (l,t) + 2.5D 邻线）
+    # Implementation note for the surrounding code.
     # ==========================================================
     def check_no_leak(ds, train_indices, val_indices):
         samples = np.asarray(ds.samples).astype(int)
@@ -8590,7 +8589,7 @@ def main():
         print("[CHK] split leak check passed ✅")
 
     # ==========================================================
-    # ✅ Helper: 更全面的 split 泄漏检查（只用 samples 索引，不碰 __getitem__）
+    # Implementation note for the surrounding code.
     # ==========================================================
     def check_split_leakage(ds, train_indices, val_indices, line_ctx=1, loow_lt_set=None, max_report=10):
         samples = np.asarray(ds.samples).astype(int)
@@ -8640,7 +8639,7 @@ def main():
               f"train_unique_lt={len(set_train)} val_unique_lt={len(set_val)} hl={hl}")
 
     # ==========================================================
-    # ✅ Helper: 标签通道健康检查（TRAIN/VAL 都建议跑）
+    # Implementation note for the surrounding code.
     # ==========================================================
     def check_mod_channel_health(ds, indices, name="TRAIN", props_idx=(0, 1, 2), max_samples=50000, seed=0):
         indices = np.asarray(indices, dtype=np.int64)
@@ -8694,7 +8693,7 @@ def main():
             print(f"[HEALTH:{name}][BL] finite={fin_rate_b:.2f}% mean={mean_b} std={std_b}")
 
     # ==========================================================
-    # 构建数据集（defer_norm=True：split 后用 train-only 统计）
+    # Implementation note for the surrounding code.
     # ==========================================================
     ds_kwargs = dict(
         angles_idx=tuple(args.angles), props_idx=tuple(args.props),
@@ -8720,7 +8719,7 @@ def main():
     n_well = int(np.asarray(ds_all.is_well_sample).sum())
     print(f"[REPORT] samples={n_all:,}, well_labeled={n_well:,} ({100.0 * n_well / max(1, n_all):.2f}%)")
 
-    # -------- Split: 优先 LOOW（留井/留井邻域），否则按 (l,t) 分组 --------
+    # Implementation note for the surrounding code.
     all_idx = np.arange(len(ds_all), dtype=np.int64)
     is_well = np.asarray(ds_all.is_well_sample).astype(bool)
     rng = np.random.default_rng(args.seed)
@@ -8761,13 +8760,13 @@ def main():
         print(f"[SPLIT][GROUP-(l,t)] train={len(train_indices)}  val={len(val_indices)}  "
               f"(groups={len(uniq_lt)}, val_groups={len(val_g)})")
 
-    # ✅ 强自检：同 (l,t) + 2.5D 邻域
+    # Implementation note for the surrounding code.
     check_no_leak(ds_all, train_indices, val_indices)
 
     # ==========================================================
-    # ✅ Train-only norm（用 Dataset 自带 recompute_norm_stats，确保 _norm_ready=True）
-    #   - 只用 train_indices
-    #   - 排除 val 的 (l,t) + 2.5D 邻域（同 trace & |Δl|<=hl）
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     # ==========================================================
     if _need_norm_recompute:
         samples = np.asarray(ds_all.samples).astype(int)
@@ -8791,7 +8790,7 @@ def main():
             verbose=True
         )
 
-    # ✅ norm 后再做更全面 split 检查（最稳）
+    # Implementation note for the surrounding code.
     check_split_leakage(
         ds_all,
         train_indices=train_indices,
@@ -8800,23 +8799,23 @@ def main():
         loow_lt_set=loow_lt_set if len(loow_lt_set) > 0 else None,
     )
 
-    # === 3) 构造子集 ===
+    # Implementation note for the surrounding code.
     train_set = torch.utils.data.Subset(ds_all, train_indices.tolist())
     val_set = torch.utils.data.Subset(ds_all, val_indices.tolist())
 
     print(f"[SPLIT] train={len(train_set)} (wells={int(is_well[train_indices].sum())}), "
           f"val={len(val_set)} (wells={int(is_well[val_indices].sum())})")
 
-    # 标签通道健康检查（强烈建议）
+    # Implementation note for the surrounding code.
     check_mod_channel_health(ds_all, train_indices, name="TRAIN", props_idx=tuple(args.props), seed=args.seed)
     check_mod_channel_health(ds_all, val_indices, name="VAL", props_idx=tuple(args.props), seed=args.seed)
 
-    # === 4) Loader（保持你原来的采样器不动）===
+    # Implementation note for the surrounding code.
     cuda_on = (torch.device(args.device).type == "cuda")
 
     def compute_trace_grad_weights(ds, subset_indices, k=1.5, eps=1e-6):
         """
-        根据纵向一阶差分的平均幅度估计难度；返回与 subset_indices 对齐的一维权重
+English implementation note for the surrounding code.
         """
         import numpy as np
         L, Tn, C, N = ds.stack.shape
@@ -8859,14 +8858,14 @@ def main():
             table[k].sort(key=lambda gi: int(ds.samples[gi][0]))
         return dict(table)
 
-    # ✅ 训练子集索引 subset_idx（只做一次）
+    # Implementation note for the surrounding code.
     subset_idx = np.asarray(train_set.indices, dtype=np.int64)
 
-    # ✅ 非井样本权重表（只做一次）
+    # Implementation note for the surrounding code.
     w_train = compute_trace_grad_weights(ds_all, subset_idx, k=1.5)
     weight_table = {int(gidx): float(w) for gidx, w in zip(subset_idx, w_train)}
 
-    # ✅ trace_table / line_table（只做一次）
+    # Implementation note for the surrounding code.
     trace_table = build_trace_index_table(ds_all, subset_idx)
     print(f"[TRACE-TABLE] traces={len(trace_table)} (train subset)")
     line_table = build_line_index_table(ds_all, subset_idx)
@@ -8874,7 +8873,7 @@ def main():
         f"[LINE-TABLE] keys={len(line_table)}  example_key={next(iter(line_table.keys())) if len(line_table) > 0 else None}")
 
     # ==========================
-    # ✅ train_loader：使用 trace block sampling
+    # Implementation note for the surrounding code.
     # ==========================
     train_loader = DataLoader(
         ds_all,
@@ -8911,7 +8910,7 @@ def main():
         collate_fn=_collate,
     )
 
-    # ✅ val_loader：只用 val_set，不 shuffle
+    # Implementation note for the surrounding code.
     val_loader = DataLoader(
         val_set,
         batch_size=args.batch,
@@ -8929,7 +8928,7 @@ def main():
     rng = np.random.default_rng(args.seed + 999)
     rng.shuffle(nonwell_all)
 
-    cont_N = min(len(nonwell_all), 200000)   # 20万点一般就很稳
+    cont_N = min(len(nonwell_all), 200000)   # Implementation note for the surrounding code.
     cont_indices = nonwell_all[:cont_N]
     cont_set = torch.utils.data.Subset(ds_all, cont_indices.tolist())
 
@@ -8947,12 +8946,12 @@ def main():
 
     # ---- device ----
     device = torch.device(args.device)
-    # ---- 可学习物理（用于 physics loss），需要真实角度(°) ----
-    # 若你知道真实角度，可以直接在这里改成实际角度；否则用兜底值
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     angle_degrees = [5, 15, 25] if len(args.angles) == 3 else [5.0] * len(args.angles)
     print(f"[PHYS] angles(deg)={angle_degrees}")
 
-    # 可学习物理核（包含 freq_logits, alpha, gamma, delta 等可训练参数）
+    # Implementation note for the surrounding code.
     physics_model = LearnableMultiFreqPhysics(
         angle_degs=angle_degrees,
         K=args.phys_K,
@@ -8962,9 +8961,9 @@ def main():
         dt=args.dt,
         center_avg=args.phys_center_avg,
         eps=args.contrast_eps,
-    ).to(device)  # ★ 整块物理模型搬到 device 上
+    ).to(device)  # Implementation note for the surrounding code.
 
-    # 物理一致性损失（带限先验 + 岩石物理先验）
+    # Implementation note for the surrounding code.
     physics_loss_fn = PhysicsInformedLossLearnable(
         physics_model=physics_model,
         physics_weight=getattr(args, "physics_loss_weight", 0.05),
@@ -8975,57 +8974,57 @@ def main():
         standardize=True,
     )
 
-    # 构造完之后（在进入训练循环前）再用命令行参数覆盖一次权重
+    # Implementation note for the surrounding code.
     physics_loss_fn.physics_weight = float(args.physics_loss_weight)
     base_phys_w = physics_loss_fn.physics_weight
 
     print(f"[INIT] physics_weight={base_phys_w:.4e}, prior_weight={physics_loss_fn.prior_weight:.4e}")
 
-    # ---- 主网络：Advanced_BNN 作为逆问题网 + ForwardNet 作为 VAIM 正演网 ----
-    # ✅ 2.5D 后：in_dim 不再是 A*win，因为 X 不再 flatten
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
 
     num_props = len(args.props)  # 3 (VP, VS, RHOB)
 
-    # ✅ 你需要在 argparse 里有 args.line_ctx（比如 7），没有就先默认 1
+    # Implementation note for the surrounding code.
     line_ctx = getattr(args, "line_ctx", 1)
     A = len(args.angles)
-    add_line_diff = bool(getattr(ds_all, "add_line_diff", False))  # ✅ 以 dataset 为准
+    add_line_diff = bool(getattr(ds_all, "add_line_diff", False))  # Implementation note for the surrounding code.
     in_ch = (2 * A) if add_line_diff else A
 
     print(f"[NET][SYNC] ds_all.add_line_diff={add_line_diff} -> encoder_in_ch={in_ch} (A={A})")
 
     cnn_encoder = CNNEncoder2D25D(
-        in_ch,  # ✅ 第一个参数用位置传，避免关键字不匹配
+        in_ch,  # Implementation note for the surrounding code.
         line_ctx=line_ctx,
         win=args.win,
         feat_dim=args.hidden
     ).to(device)
     setattr(args, "add_line_diff", add_line_diff)
-    # 2) 小 BNN 头：把 CNN feature -> 属性（不变）
+    # Implementation note for the surrounding code.
     attr_head = SmallBNNHeadSeqMVT(
         in_dim=args.hidden,
         hidden=args.hidden,
         win=args.win,
-        out_dim=num_props,   # 这里还是 3
+        out_dim=num_props,   # Implementation note for the surrounding code.
         bayes=args.bayes,
         n_comp=getattr(args, "n_comp", 3),
     ).to(device)
 
-    # 3) 把 encoder + head 打成一个 AttrBNN，接口兼容 inv_net
+    # Implementation note for the surrounding code.
     class AttrBNN(nn.Module):
         def __init__(self, encoder, head):
             super().__init__()
             self.encoder = encoder
             self.head = head
 
-            # 记录 encoder 期望的输入通道数（Conv2d 的 in_channels）
+            # Implementation note for the surrounding code.
             try:
                 self._enc_in_ch = int(self.encoder.conv1.in_channels)
             except Exception:
                 self._enc_in_ch = None
 
         def forward(self, X, return_kl: bool = True):
-            # 防呆：4D 输入时检查通道数是否匹配
+            # Implementation note for the surrounding code.
             if (self._enc_in_ch is not None) and torch.is_tensor(X) and (X.dim() == 4):
                 xin = int(X.size(1))
                 if xin != self._enc_in_ch:
@@ -9039,7 +9038,7 @@ def main():
 
             out = self.head(h, return_kl=return_kl)
 
-            # mixture-mean 版：head 可能返回 4 项
+            # Implementation note for the surrounding code.
             if isinstance(out, (tuple, list)) and len(out) >= 4:
                 mu, chol_params, kl, extra = out[:4]
                 return mu, chol_params, kl, extra
@@ -9054,7 +9053,7 @@ def main():
 
     inv_net = AttrBNN(cnn_encoder, attr_head).to(device)
 
-    # 4) 用物理版 BNN-VAIM wrapper：d_rec 直接来自 physics_core（不变）
+    # Implementation note for the surrounding code.
     model = BNNVAIMPhysics(
         attr_net=inv_net,
         physics_model=physics_model,
@@ -9068,15 +9067,15 @@ def main():
 
     model.student_df = float(args.student_df)
     print(f"[MVT] unified student_df = {model.student_df:.3f}")
-    # --- 温度缩放模块（针对属性通道） ---
+    # Implementation note for the surrounding code.
     temp_scale = PerChannelTemp(C=num_props).to(device)
-    temp_scale.tau_raw.requires_grad_(False)  # 先冻结，后面 warmup 之后再解冻
+    temp_scale.tau_raw.requires_grad_(False)  # Implementation note for the surrounding code.
 
-    # ====== 温度缩放：给 VP/VS 更大的初始 τ，RHOB 稍微小一点 ======
-    # 你的 PerChannelTemp 里面是用 softplus(tau_raw) 做的正数约束，
-    # 所以这里用 softplus 的反函数来设定初值：
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     with torch.no_grad():
-        # 目标温度：VP、VS 取 3.0，RHOB 取 1.5（可以以后再调）
+        # Implementation note for the surrounding code.
         base_tau = torch.tensor([3.0, 3.0, 1.5], device=device)
         # softplus^{-1}(y) = log(exp(y) - 1)
         temp_scale.tau_raw.copy_(torch.log(torch.exp(base_tau) - 1.0))
@@ -9085,9 +9084,9 @@ def main():
           torch.nn.functional.softplus(temp_scale.tau_raw).detach().cpu().numpy())
 
 
-    # ---- 两个优化器：主网(= inv_net+fwd_net+temp_scale) + 可学习物理 ----
+    # Implementation note for the surrounding code.
     if not hasattr(args, "lr_phys"):
-        args.lr_phys = args.lr_main * 0.3  # 如果命令行没给，就默认 0.3× 主学习率
+        args.lr_phys = args.lr_main * 0.3  # Implementation note for the surrounding code.
 
     optimizer_main = torch.optim.AdamW(
         list(inv_net.parameters()) + list(temp_scale.parameters()),
@@ -9111,33 +9110,33 @@ def main():
     best_epoch = -1
     bad_epochs = 0
 
-    # 判定阈值（避免浮点抖动导致“伪提升”）
+    # Implementation note for the surrounding code.
     mse_eps = getattr(args, "mse_eps", 1e-6)
     r2_eps = getattr(args, "r2_eps", 1e-4)
-    patience = getattr(args, "patience", 20)  # 没有就默认 20
+    patience = getattr(args, "patience", 20)  # Implementation note for the surrounding code.
 
     train_hist = []
     val_hist = []
 
-    print(f"开始训练：device={device}  hidden={args.hidden}")
-    print(f"物理损失权重={args.physics_loss_weight}  β_kl={args.beta_kl}")
+    print(f"Start training: device={device}  hidden={args.hidden}")
+    print(f"Physics loss weight={args.physics_loss_weight}  beta_kl={args.beta_kl}")
     print(f"[PHYS] angles(deg)={angle_degrees}")
 
-    # === 3.2 物理核 warm-up 冻结 / 解冻 ===
-    warmup_phys = int(getattr(args, "warmup_phys", 10))  # 前 warmup_phys 个 epoch 不启用 physics、不更新物理核
-    phys_ramp_len = int(getattr(args, "phys_ramp_len", 5))  # 解冻后 ramp 到 base_phys_w
+    # Implementation note for the surrounding code.
+    warmup_phys = int(getattr(args, "warmup_phys", 10))  # Implementation note for the surrounding code.
+    phys_ramp_len = int(getattr(args, "phys_ramp_len", 5))  # Implementation note for the surrounding code.
 
-    # 冻结 physics_core（如果存在）
+    # Implementation note for the surrounding code.
     if physics_model is not None:
         for p in physics_model.parameters():
             p.requires_grad_(False)
     print(f"[PHYS] freeze physics_core for first {warmup_phys} epochs.")
 
-    # ===== EMA 自动平衡器：只创建一次，跨 epoch 累积 =====
-    # ✅ 若你已经把 train 收敛成“只保留 physics/lat/vaim/kl/recon”，
-    #    这里 names 就别再放 seq/freq/lowfreq/rho_hf 这类项，避免混乱。
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     loss_balancer = EMALossBalancer(
-        names=["recon", "kl"],  # ✅ 对齐：你要保留的 EMA 项（只平衡 recon / kl）
+        names=["recon", "kl"],  # Implementation note for the surrounding code.
         decay=0.99,
         target=1.0,
         clamp_min=0.05,
@@ -9151,16 +9150,16 @@ def main():
     phys_norm = PhysEMANormalizer(decay=0.99, device=device)
     loss_shifter = LossShiftEMA(decay=0.99, device=device)
 
-    # ---- 基础权重 ----
+    # Implementation note for the surrounding code.
     base_phys_w = float(getattr(args, "physics_loss_weight", 0.0))
     base_lambda = float(getattr(args, "well_loss_weight", 0.0))
 
-    # well schedule（沿用你原来的）
+    # Implementation note for the surrounding code.
     well_warm = int(getattr(args, "well_warm", 3))
     well_cool_start = int(getattr(args, "well_cool_start", 10))
     well_min = float(getattr(args, "well_min", 0.4 * base_lambda))
 
-    # lat / dt / recon / eval_Tmc（用于对齐 train/eval）
+    # Implementation note for the surrounding code.
     lambda_lat = float(getattr(args, "lambda_lat", 0.02))
     warm_lat_ep = int(getattr(args, "warm_lat_ep", 5))
     lat_max_gap = int(getattr(args, "lat_max_gap", 8))
@@ -9168,27 +9167,27 @@ def main():
     eval_Tmc = int(getattr(args, "eval_Tmc", 8))
     dt = float(getattr(args, "dt", 0.001))
 
-    # 温度缩放提前解冻一点，让它参与更多训练
+    # Implementation note for the surrounding code.
     warmup_temp = max(3, int(args.epochs * 0.3))
 
-    # ====== 循环前：解包出 core_inv（你原逻辑保留，不动）======
+    # Implementation note for the surrounding code.
     if isinstance(model, torch.nn.DataParallel):
         _net = model.module
     else:
         _net = model
     core_inv = getattr(_net, "inv_net", _net)
 
-    # 循环前先挑一个井位作为默认检查井（你原逻辑保留）
+    # Implementation note for the surrounding code.
     if hasattr(ds_all, "_wells_set") and len(ds_all._wells_set) > 0:
         l0, t0 = next(iter(ds_all._wells_set))
     else:
         l0, t0 = ds_all.stack.shape[0] // 2, ds_all.stack.shape[1] // 2
 
-    # ================== 训练主循环 ==================
+    # Implementation note for the surrounding code.
     for ep in range(1, args.epochs + 1):
 
         # ===============================
-        # ✅ VAIM 权重：warmup + ramp（你原逻辑保留）
+        # Implementation note for the surrounding code.
         # ===============================
         base_vaim = float(getattr(args, "lambda_vaim", 0.0))
         warm_vaim_ep = int(getattr(args, "warm_vaim_ep", 0))
@@ -9203,7 +9202,7 @@ def main():
             prog = max(0.0, min(1.0, prog))
             cur_lambda_vaim = base_vaim * prog
 
-        # === 解冻 τ ===
+        # === unfreeze τ ===
         if (temp_scale is not None) and (ep == warmup_temp):
             temp_scale.tau_raw.requires_grad_(True)
             try:
@@ -9212,7 +9211,7 @@ def main():
                 tau_now = None
             print(f"[TEMP] per-channel tau unfrozen at epoch {ep}, tau = {tau_now}")
 
-        # === 到达 warmup_phys+1 时，解冻物理核 + 重置 phys_norm ===
+        # Implementation note for the surrounding code.
         if (physics_model is not None) and (ep == warmup_phys + 1):
             for p in physics_model.parameters():
                 p.requires_grad_(True)
@@ -9224,17 +9223,17 @@ def main():
                 phys_norm._ema_prior = None
                 print("[PHYS] reset PhysEMANormalizer at physics enable epoch.")
 
-        # --- physics 权重：warmup=0；解冻后 ramp 到 base_phys_w ---
+        # Implementation note for the surrounding code.
         if physics_loss_fn is not None:
             if ep <= warmup_phys:
-                # 例如给一个小权重，而不是 0
+                # Implementation note for the surrounding code.
                 physics_loss_fn.physics_weight = base_phys_w * 0.2
             else:
                 prog = (ep - warmup_phys) / float(max(1, phys_ramp_len))  # ep=warmup+1 -> 1/ramp
                 prog = max(0.0, min(1.0, prog))
                 physics_loss_fn.physics_weight = base_phys_w * prog
 
-        # --- 井项：升温 → 线性降到 well_min ---
+        # Implementation note for the surrounding code.
         if ep <= well_warm:
             cur_lambda = base_lambda * (ep / float(max(1, well_warm)))
         elif ep >= well_cool_start:
@@ -9244,27 +9243,27 @@ def main():
         else:
             cur_lambda = base_lambda
 
-        # === 本 epoch 是否更新物理核 ===
+        # Implementation note for the surrounding code.
         w_phys_now = float(getattr(physics_loss_fn, "physics_weight", 0.0)) if physics_loss_fn is not None else 0.0
         if (ep <= warmup_phys) or (physics_model is None) or (w_phys_now <= 0.0):
             optimizer_phys_ep = None
         else:
             optimizer_phys_ep = optimizer_phys
 
-        # --------- 1) 训练（对齐你的对齐版 train：physics/lat/vaim/kl/recon + loss_balancer）---------
+        # Implementation note for the surrounding code.
         tr = train_epoch_vaim(
             model, train_loader,
             optimizer_main, optimizer_phys_ep,
             args.beta_kl, device,
             physics_loss_fn=physics_loss_fn,
             phys_norm=phys_norm,
-            lambda_well=cur_lambda,  # ✅ 对齐：本 epoch 的井权重
+            lambda_well=cur_lambda,  # Implementation note for the surrounding code.
             denormalize_fn=ds_all.denormalize_y,
             kl_scheduler=cyclical_beta,
             epoch_idx=ep,
             temp_scale=temp_scale,
             auto_w_phys=False,
-            # ✅ 对齐关键超参
+            # Implementation note for the surrounding code.
             lambda_lat=lambda_lat,
             warm_lat_ep=warm_lat_ep,
             lat_max_gap=lat_max_gap,
@@ -9274,7 +9273,7 @@ def main():
             lambda_vaim=cur_lambda_vaim,
             lambda_recon=lambda_recon,
 
-            # ✅ 只平衡你保留的辅项（recon/kl）
+            # Implementation note for the surrounding code.
             loss_balancer=loss_balancer,
             global_step_start=global_step,
 
@@ -9286,7 +9285,7 @@ def main():
         )
         global_step += len(train_loader)
 
-        # --------- 2) 验证（对齐你的对齐版 eval：传 epoch_idx + lat/vaim/dt 等）---------
+        # Implementation note for the surrounding code.
         va = eval_epoch_vaim(
             model, val_loader, device,
             physics_loss_fn=physics_loss_fn,
@@ -9305,14 +9304,14 @@ def main():
             dt=dt,
             lambda_vaim=cur_lambda_vaim,
 
-            # ✅ 关键：把 well 打开
+            # Implementation note for the surrounding code.
             lambda_well=float(cur_lambda),
             desc="Validation",
         )
 
         # ==========================================================
         # CONT dense non-well validation
-        # mode=well 且 far_keep_ratio=0.0 时，cont_loader 可能为空，需要跳过
+        # Implementation note for the surrounding code.
         # ==========================================================
         do_cont_eval = (
                 cont_loader is not None
@@ -9368,9 +9367,9 @@ def main():
         print(
             f"[CONT@NONWELL] trace_pairs={tp} line_pairs={lp} | ncc(trace/line)={tn:.4f}/{ln:.4f} l1(trace/line)={tl:.3f}/{ll:.3f}")
 
-        # --------- 3) LR 调度 ---------
+        # Implementation note for the surrounding code.
         scheduler_main.step()
-        # 物理核的 lr 只有在开始更新之后才衰减
+        # Implementation note for the surrounding code.
         if ep > warmup_phys and ep >= 10 and (ep % 2 == 0):
             for pg in optimizer_phys.param_groups:
                 pg["lr"] = max(pg["lr"] * 0.5, args.lr_phys * 0.01)
@@ -9383,7 +9382,7 @@ def main():
         train_hist.append(tr)
         val_hist.append(va)
 
-        # === 记录当前 per-channel τ（对齐：eval/train 都可能返回 _tau；这里仍以 temp_scale 为准）===
+        # Implementation note for the surrounding code.
         try:
             with torch.no_grad():
                 tau_now = torch.nn.functional.softplus(temp_scale.tau_raw).detach().cpu().numpy() + 1.0
@@ -9393,13 +9392,13 @@ def main():
         except Exception:
             tr["tau_vp"] = tr["tau_vs"] = tr["tau_rhob"] = float("nan")
 
-        # === physics 当前权重 ===
+        # Implementation note for the surrounding code.
         try:
             w_phys_now = float(getattr(physics_loss_fn, "physics_weight", 0.0)) if physics_loss_fn is not None else 0.0
         except Exception:
             w_phys_now = 0.0
 
-        # === safe getter（防 KeyError + 自动兜底 mse_for_log）===
+        # Implementation note for the surrounding code.
         def _g(d, k, default=0.0):
             try:
                 v = d.get(k, default)
@@ -9410,10 +9409,10 @@ def main():
                 return float(default)
 
         # =========================
-        # 取指标（补齐版）
+        # Implementation note for the surrounding code.
         # =========================
 
-        # train 指标（与你 train 返回对齐）
+        # Implementation note for the surrounding code.
         tr_loss = _g(tr, "loss")
         tr_mse = _g(tr, "mse", _g(tr, "mse_for_log", float("nan")))
         tr_attr = _g(tr, "attr_loss", float("nan"))
@@ -9424,11 +9423,11 @@ def main():
         tr_lat = _g(tr, "lat")
         tr_lat_pairs = int(tr.get("lat_pairs", 0) or 0)
 
-        # well（如果你 train 里返回的是 well_term 更合理就优先）
+        # Implementation note for the surrounding code.
         well_tr_raw = _g(tr, "well_loss", 0.0)
         well_tr_term = _g(tr, "well_term", 0.0)
 
-        # val 指标（与你 eval 返回对齐）
+        # Implementation note for the surrounding code.
         va_loss = _g(va, "loss")
         va_mse = _g(va, "mse", _g(va, "mse_for_log", float("nan")))
         va_attr = _g(va, "attr_loss", float("nan"))
@@ -9453,7 +9452,7 @@ def main():
         cont_line_l1 = _g(va_cont, "cont_line_l1", float("nan"))
 
         # =========================
-        # 打印（补齐版）
+        # Implementation note for the surrounding code.
         # =========================
         print(
             f"[CHK-EPOCH] ep={ep} "
@@ -9488,8 +9487,8 @@ def main():
         )
 
         # ✅ Early stopping / best selection: val_mse + val_r2
-        #   规则：mse 明显更小 -> better
-        #        mse 近似持平 -> r2 更大 -> better
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         # --------------------------------------------
         val_mse = float(va.get("mse", 1e9))
         val_r2 = float(va.get("r2", float("-inf")))
@@ -9616,8 +9615,8 @@ def main():
             bad_epochs += 1
 
         # ==========================================================
-        # ✅ last.pt 每个 epoch 都保存一次
-        # 注意：这里和 if improved / else 同级，仍然在 for ep 循环里面
+        # Implementation note for the surrounding code.
+        # Implementation note for the surrounding code.
         # ==========================================================
         os.makedirs(args.out, exist_ok=True)
         torch.save(
@@ -9638,14 +9637,14 @@ def main():
             break
 
     # ==========================================================
-    # ✅ 训练循环结束后，再统一做最终绘图和评估
-    # 注意：下面这些代码必须和 for ep 对齐，不能缩进在 for ep 里面
+    # Implementation note for the surrounding code.
+    # Implementation note for the surrounding code.
     # ==========================================================
-    print(f"训练完成。最佳验证：MSE={best_val_mse:.6f}, R2={best_val_r2:.4f} (epoch={best_epoch})")
+    print(f"Training completed. Best validation: MSE={best_val_mse:.6f}, R2={best_val_r2:.4f} (epoch={best_epoch})")
 
     plot_training_curves(train_hist, val_hist, args.out, beta_kl=args.beta_kl)
 
-    # === 训练结束后，只出一次 vres/spectra/ncc ===
+    # Implementation note for the surrounding code.
     if isinstance(model, torch.nn.DataParallel):
         wrapper = model.module
     else:
@@ -9671,7 +9670,7 @@ if __name__ == "__main__":
     import sys, torch
 
     sys.argv = [
-        "bnn_vaim_marmousi_well.py",
+        "marmousi_test.py",
 
         # Marmousi2 red-box synthetic data
         "--stack", "/data/cv/marmousi/marmousi2_cropped/marmousi2_crop_stack4d_35hz.mat",
@@ -9680,40 +9679,40 @@ if __name__ == "__main__":
         "--angles", "0", "1", "2",
         "--win", "29",
 
-        # Synthetic data: 5口伪井，4训1验
+        # Implementation note for the surrounding code.
         "--mode", "wellhood",
         "--wells_xlsx", "",
 
-        # 井约束略增强，但不回到过强的 1.5 / 24
+        # Implementation note for the surrounding code.
         "--well_radius", "8",
         "--well_loss_weight", "1.35",
         "--well_min_per_batch", "20",
         "--far_keep_ratio", "0.16",
 
-        # physics: 提高物理项，有助于 RHOB 约束
+        # Implementation note for the surrounding code.
         "--physics_loss_weight", "0.15",
         "--contrast_eps", "0.02",
         "--dominant_freq", "35.0",
         "--dt", "0.001",
 
-        # 训练轮数拉长，让 RHOB 有机会继续收敛
+        # Implementation note for the surrounding code.
         "--epochs", "80",
         "--batch", "128",
         "--lr", "2.5e-4",
 
         "--hidden", "256",
 
-        # KL 略减弱，优先提高预测均值精度
+        # Implementation note for the surrounding code.
         "--beta_kl", "5e-5",
         "--bayes", "reparam",
 
         "--device", "cuda" if torch.cuda.is_available() else "cpu",
-        "--out", "/data/cv/marmousi/bnn_ckpt_marmousi_well_residual",
+        "--out", "/data/cv/marmousi/marmousi_test",
 
         "--num_heads", "8",
         "--num_layers", "12",
 
-        # 正则略减弱，避免 RHOB 欠拟合
+        # Implementation note for the surrounding code.
         "--dropout", "0.02",
         "--weight_decay", "0.006",
         "--val_ratio", "0.12",
@@ -9721,12 +9720,12 @@ if __name__ == "__main__":
         "--recon", "student",
         "--student_df", "6.0",
 
-        # 低频趋势略增强，主要帮助 RHOB 的背景趋势
+        # Implementation note for the surrounding code.
         "--lf_cut", "8.0",
         "--lambda_vaim", "0.0",
         "--lf_weight", "0.08",
 
-        # 横向连续性略增强，但不要太大
+        # Implementation note for the surrounding code.
         "--lambda_lat", "0.25",
         "--warm_lat_ep", "5",
         "--lat_max_gap", "12",
