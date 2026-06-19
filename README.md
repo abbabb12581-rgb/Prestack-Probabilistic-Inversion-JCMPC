@@ -1,4 +1,4 @@
-<img width="2860" height="1540" alt="fig_1" src="https://github.com/user-attachments/assets/ecc58ffb-8310-4d24-b7b2-3998d7068ed3" /># Prestack-Probabilistic-Inversion-JCMPC
+## Prestack-Probabilistic-Inversion-JCMPC
 
 Code implementation for the paper "Joint-Covariance-Guided Prestack Probabilistic Inversion of Elastic Parameters with Physics Constraints". This repository contains the data-preparation scripts, prestack probabilistic inversion code, noise robustness testing code, processed Marmousi2 model data, and result figures for reproducing the experiments presented in the paper.
 
