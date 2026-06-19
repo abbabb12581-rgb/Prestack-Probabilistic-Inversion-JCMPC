@@ -19,10 +19,10 @@ Prestack-Probabilistic-Inversion-JCMPC/
 ├── README.md
 │
 ├── figure/
-│   ├── 图1.png
-│   ├── 图2.png
+│   ├── fig_1.png
+│   ├── fig_2.png
 │   ├── ...
-│   └── 图9.png
+│   └── fig_11.png
 │
 └── model data/
     ├── data_crop/
