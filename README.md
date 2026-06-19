@@ -22,7 +22,7 @@ Prestack-Probabilistic-Inversion-JCMPC/
 │   ├── fig_1.png
 │   ├── fig_2.png
 │   ├── ...
-│   └── fig_11.png
+│   └── fig_10.png
 │
 └── model data/
     ├── data_crop/
@@ -163,7 +163,7 @@ The main outputs include predicted elastic-parameter profiles, validation-well c
 
 Among these outputs, the predicted elastic-parameter profiles are shown in figure/fig_3.png.
 <p align="center">
-  <img src="figure/fig_3.png" alt="Predicted elastic-parameter profiles" width="500">
+  <img src="figure/fig_3.png" alt="Predicted elastic-parameter profiles" width="600">
 </p>
 
 ### 3. Noise robustness test
