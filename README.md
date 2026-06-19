@@ -108,7 +108,7 @@ An NVIDIA GPU is recommended for model training.
 Clone the repository:
 
 ```bash
-git clone https://github.com/zhub4826-code/Prestack-Probabilistic-Inversion-JCMPC.git
+git clone https://github.com/abbabb12581-rgb/Prestack-Probabilistic-Inversion-JCMPC.git
 cd Prestack-Probabilistic-Inversion-JCMPC
 ```
 
@@ -194,7 +194,7 @@ Program language: Python
 
 Program size: 370 KB
 
-Availability: The source code is available at https://github.com/zhub4826-code/Prestack-Probabilistic-Inversion-JCMPC.git
+Availability: The source code is available at https://github.com/abbabb12581-rgb/Prestack-Probabilistic-Inversion-JCMPC.git
 
 
 ## Notes
