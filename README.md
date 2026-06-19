@@ -145,6 +145,7 @@ This script reads the original Marmousi2 SEG-Y files, crops the selected model r
 The generated data include the cropped depth-domain models of P-wave velocity, S-wave velocity, and density, as well as synthetic prestack seismic responses at different incidence angles. These outputs are saved in model data/data_crop/.
 
 Among these outputs, the cropped Marmousi2 elastic-parameter models and synthetic prestack seismic data are shown in figure/fig_1.png.
+![Cropped Marmousi2 models and synthetic prestack seismic data](figure/fig_1.png)
 
 ### 2. Main inversion experiment
 
