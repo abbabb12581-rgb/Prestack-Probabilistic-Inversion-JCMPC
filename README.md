@@ -145,7 +145,9 @@ This script reads the original Marmousi2 SEG-Y files, crops the selected model r
 The generated data include the cropped depth-domain models of P-wave velocity, S-wave velocity, and density, as well as synthetic prestack seismic responses at different incidence angles. These outputs are saved in model data/data_crop/.
 
 Among these outputs, the cropped Marmousi2 elastic-parameter models and synthetic prestack seismic data are shown in figure/fig_1.png.
-![Cropped Marmousi2 models and synthetic prestack seismic data](figure/fig_1.png)
+<p align="center">
+  <img src="figure/fig_1.png" alt="Cropped Marmousi2 models and synthetic prestack seismic data" width="900">
+</p>
 
 ### 2. Main inversion experiment
 
@@ -161,7 +163,7 @@ The main outputs include predicted elastic-parameter profiles, validation-well c
 
 Among these outputs, the predicted elastic-parameter profiles are shown in figure/fig_3.png.
 <p align="center">
-  <img src="figure/fig_3.png" alt="Predicted elastic-parameter profiles" width="900">
+  <img src="figure/fig_3.png" alt="Predicted elastic-parameter profiles" width="500">
 </p>
 
 ### 3. Noise robustness test
