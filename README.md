@@ -1,12 +1,12 @@
 # Prestack-Probabilistic-Inversion-JCMPC
 
-Code for prestack multi-parameter probabilistic inversion integrating joint covariance modeling and physics constraints.
+Code implementation for the paper "Joint-Covariance-Guided Prestack Probabilistic Inversion of Elastic Parameters with Physics Constraints". This repository contains the data-preparation scripts, prestack probabilistic inversion code, noise robustness testing code, processed Marmousi2 model data, and result figures for reproducing the experiments presented in the paper.
 
 ## Overview
 
-This repository provides the source code and example workflow for prestack multi-parameter probabilistic inversion based on joint covariance modeling and physics constraints. The method is designed for the joint prediction of P-wave velocity, S-wave velocity, and density from prestack seismic data, while characterizing the statistical dependencies and joint uncertainty among elastic parameters.
+This project aims to perform prestack multi-parameter probabilistic inversion of elastic parameters, including P-wave velocity ($V_p$), S-wave velocity ($V_s$), and density ($\rho$), from prestack seismic data. The proposed framework integrates joint covariance modeling and physics constraints to improve inversion accuracy, profile continuity, and uncertainty characterization.
 
-The framework includes data preparation for the Marmousi2 model, prestack synthetic seismic-data generation, probabilistic inversion, prediction-result visualization, residual analysis, and noise robustness testing.
+The code provides an example workflow based on the Marmousi2 model, including model cropping, prestack synthetic seismic-data generation, probabilistic inversion, prediction-result visualization, residual analysis, and noise robustness evaluation.
 
 ## Repository Structure
 
@@ -77,24 +77,10 @@ vs_marmousi-ii.segy
 density_marmousi-ii.segy
 ```
 
-Because these files are large, they may exceed the standard GitHub file-size limit and are not recommended for direct upload to the repository. These original Marmousi2 model files can be downloaded from the Allied Geophysical Laboratories website:
+The three large original Marmousi2 SEG-Y files are not included in this repository. Users can download these files from the Allied Geophysical Laboratories website:
 
 ```text
 http://www.agl.uh.edu/downloads/downloads.htm
-```
-
-After downloading, place the three SEG-Y files in the following directory:
-
-```text
-model data/
-```
-
-The expected file paths are:
-
-```text
-model data/vp_marmousi-ii.segy
-model data/vs_marmousi-ii.segy
-model data/density_marmousi-ii.segy
 ```
 
 ## Requirements
@@ -210,17 +196,6 @@ Program size: 370 KB
 
 Availability: The source code is available at https://github.com/zhub4826-code/Prestack-Probabilistic-Inversion-JCMPC.git
 
-## Citation
-
-If you use this code in your research, please cite the associated paper:
-
-```text
-Bingbing Zhu, Peng Wang, Xiaoyang Wang, Qinghui Mao, and Ke Pan.
-Prestack Multi-parameter Probabilistic Inversion Integrating Joint Covariance Modeling and Physics Constraints.
-Computers & Geosciences.
-```
-
-The full citation information will be updated after publication.
 
 ## Notes
 
@@ -236,4 +211,3 @@ For questions or further information, please contact:
 Bingbing Zhu
 Email: 18921790664@163.com
 ```
-# Prestack-Probabilistic-Inversion-JCMPC
