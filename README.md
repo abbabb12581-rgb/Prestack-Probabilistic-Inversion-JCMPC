@@ -159,7 +159,7 @@ python marmousi_test.py
 
 This script performs model training, prestack multi-parameter probabilistic inversion, prediction-result visualization, validation, and residual analysis. The inversion target includes P-wave velocity, S-wave velocity, and density.
 
-The main outputs include predicted elastic-parameter profiles, validation-well comparison results, residual maps, Q-Q plots, joint-distribution visualizations, and quantitative evaluation metrics such as correlation coefficient, RMSE, MAE, and (R^2).
+The main outputs include predicted elastic-parameter profiles, validation-well comparison results, residual maps, Q-Q plots, joint-distribution visualizations, and quantitative evaluation metrics such as correlation coefficient, RMSE, MAE, and ($R^2$).
 
 Among these outputs, the predicted elastic-parameter profiles are shown in figure/fig_3.png.
 <p align="center">
