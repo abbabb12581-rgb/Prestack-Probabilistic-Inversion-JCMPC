@@ -1,10 +1,14 @@
 ## Prestack-Probabilistic-Inversion-JCMPC
 
-Code implementation for the paper "Joint-Covariance-Guided Prestack Probabilistic Inversion of Elastic Parameters with Physics Constraints". This repository contains the data-preparation scripts, prestack probabilistic inversion code, noise robustness testing code, processed Marmousi2 model data, and result figures for reproducing the experiments presented in the paper.
+Code implementation for the paper "Joint-Covariance-Guided Prestack Probabilistic Inversion of Elastic Parameters with Physics Constraints". This repository contains the data-preparation scripts, prestack probabilistic inversion code, noise robustness testing code, processed Marmousi2 model data, and result figures for reproducing the tests presented in the paper.
 
 ## Overview
 
 This project aims to perform prestack multi-parameter probabilistic inversion of elastic parameters, including P-wave velocity ($V_p$), S-wave velocity ($V_s$), and density ($\rho$), from prestack seismic data. The proposed framework integrates joint covariance modeling and physics constraints to improve inversion accuracy, profile continuity, and uncertainty characterization.
+
+<p align="center">
+  <img src="figure/fig_11.png" alt="Workflow of the proposed prestack probabilistic inversion framework" width="900">
+</p>
 
 The code provides an example workflow based on the Marmousi2 model, including model cropping, prestack synthetic seismic-data generation, probabilistic inversion, prediction-result visualization, residual analysis, and noise robustness evaluation.
 
@@ -22,7 +26,7 @@ Prestack-Probabilistic-Inversion-JCMPC/
 │   ├── fig_1.png
 │   ├── fig_2.png
 │   ├── ...
-│   └── fig_10.png
+│   └── fig_11.png
 │
 └── model data/
     ├── data_crop/
@@ -43,13 +47,13 @@ The main scripts are listed below.
 marmousi2_crop.py
 ```
 
-This script is used to crop and prepare the Marmousi2 elastic-parameter models and generate the auxiliary model files required for the inversion experiment.
+This script is used to crop and prepare the Marmousi2 elastic-parameter models and generate the auxiliary model files required for our inversion method.
 
 ```text
 marmousi_test.py
 ```
 
-This script is used to perform the prestack multi-parameter probabilistic inversion experiment on the Marmousi2 model and generate prediction results, residual maps, validation plots, and related output files.
+This script is used to perform the prestack multi-parameter probabilistic inversion on the Marmousi2 model and generate prediction results, residual maps, validation plots, and related output files.
 
 ```text
 marmousi_noise_test.py
@@ -85,7 +89,7 @@ http://www.agl.uh.edu/downloads/downloads.htm
 
 ## Requirements
 
-The experiments in this study were conducted on a workstation equipped with dual Intel Xeon Platinum 8173M CPUs, with 56 physical cores and 112 logical threads, and an NVIDIA GeForce RTX 3090 GPU with 24 GB VRAM.
+The scripts in this study were conducted on a workstation equipped with dual Intel Xeon Platinum 8173M CPUs, with 56 physical cores and 112 logical threads, and an NVIDIA GeForce RTX 3090 GPU with 24 GB VRAM.
 
 The software environment used in this study was:
 
@@ -140,7 +144,7 @@ To prepare the cropped Marmousi2 data from the original SEG-Y files, run:
 python marmousi2_crop.py
 ```
 
-This script reads the original Marmousi2 SEG-Y files, crops the selected model region, converts the depth-domain elastic-parameter models into the required data format, and generates the auxiliary .mat files used in the subsequent prestack inversion experiment.
+This script reads the original Marmousi2 SEG-Y files, crops the selected model region, converts the depth-domain elastic-parameter models into the required data format, and generates the auxiliary .mat files used in the subsequent prestack inversion.
 
 The generated data include the cropped depth-domain models of P-wave velocity, S-wave velocity, and density, as well as synthetic prestack seismic responses at different incidence angles. These outputs are saved in model data/data_crop/.
 
@@ -149,9 +153,9 @@ Among these outputs, the cropped Marmousi2 elastic-parameter models and syntheti
   <img src="figure/fig_1.png" alt="Cropped Marmousi2 models and synthetic prestack seismic data" width="900">
 </p>
 
-### 2. Main inversion experiment
+### 2. Inversion method
 
-Run the main prestack probabilistic inversion experiment:
+Run the prestack probabilistic inversion script:
 
 ```bash
 python marmousi_test.py
@@ -168,7 +172,7 @@ Among these outputs, the predicted elastic-parameter profiles are shown in figur
 
 ### 3. Noise robustness test
 
-Run the noise robustness experiment:
+Run the noise robustness test script:
 
 ```bash
 python marmousi_noise_test.py
@@ -207,7 +211,7 @@ Developer: Bingbing Zhu
 
 Contact: [18921790664@163.com](mailto:18921790664@163.com)
 
-Hardware requirements: The experiments were conducted on a workstation equipped with dual Intel Xeon Platinum 8173M CPUs, with 56 physical cores and 112 logical threads, and an NVIDIA GeForce RTX 3090 GPU with 24 GB VRAM.
+Hardware requirements: The test scripts were conducted on a workstation equipped with dual Intel Xeon Platinum 8173M CPUs, with 56 physical cores and 112 logical threads, and an NVIDIA GeForce RTX 3090 GPU with 24 GB VRAM.
 
 Software requirements: Python 3.10, PyTorch, CUDA 12.2, and NVIDIA GPU driver version 535.54.03.
 
